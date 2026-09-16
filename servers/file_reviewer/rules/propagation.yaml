@@ -1,0 +1,77 @@
+category_id: propagation
+category: 传播性行为
+description: 代码会自己把东西推给别人：自动推送/发布/群发/复制自身/替用户操作账号。传播产生的后果不可预见，不论是否声称"官方行为"，一律列入必须修复计划。
+default_disposition: 必须修复
+rules:
+  - id: PG001
+    name: 自动 git push / 自动发布
+    languages: [shell, python, javascript, typescript, yaml, any]
+    pattern: '(\bgit\s+push\b[^\n]*(--force|-f\b|--all|--mirror|--tags)|\bgit\s+push\b[^\n]*origin\s+(HEAD|main|master)|\bnpm\s+publish\b|\btwine\s+upload\b|\bpip\s+upload|\bgh\s+release\s+create|\bcargo\s+publish|\bgem\s+push|\bdocker\s+push\b)'
+    severity: 高
+    literal: 'git push --force / npm publish（推送 强制 / 发布）：把代码自动推到远程仓库或公开发包'
+    plain: '程序运行时会自动把代码推到远端、或者直接发布成公开的包。一旦发出去，全世界都能下到，撤不回来。'
+    consequence: '未经审查的内容被传播；若含密钥或恶意代码，影响所有下载者。传播后果不可预见。'
+    authority: ['OWASP A08:2021 软件和数据完整性失效', 'CWE-829']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: PG002
+    name: 自动 fork / 创建仓库 / 写入他人仓库
+    languages: [any]
+    pattern: '(\bgh\s+repo\s+(fork|create)\b|api\.github\.com/(user/repos|repos/[^/\s]+/[^/\s]+/forks)|\bgh\s+pr\s+create\b[^\n]*--fill|octokit[^\n]*\.(createFork|createForAuthenticatedUser|createOrUpdateFileContents))'
+    severity: 高
+    literal: 'gh repo fork / octokit.repos.createFork（复刻仓库 / 创建仓库）：用你的账号自动新建或复刻仓库'
+    plain: '程序会用你的身份在 GitHub 上自动开仓库、复刻别人的仓库、往仓库里写文件。这是"用你的名字传播"。'
+    consequence: '以你的身份大量创建内容；账号可能因滥用被封。'
+    authority: ['MITRE ATT&CK T1078 合法账号滥用']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: PG003
+    name: 群发消息 / 邮件
+    languages: [any]
+    pattern: '(smtplib\.SMTP|sendmail\b|nodemailer|sendgrid|mailgun|\.send_message\(|chat\.postMessage|client\.chat_postMessage|bot\.send_message|sendMessage\([^\n]*chat_id|twilio[^\n]*messages\.create|for\s+\w+\s+in\s+\w*(contacts|users|members|emails|recipients)\w*[^\n]*:\s*$)'
+    severity: 中
+    literal: 'smtplib.SMTP / bot.send_message（邮件发送 / 机器人.发消息）：程序自动对外发消息'
+    plain: '程序会自动发邮件、发群消息。若是对一个列表循环发，就是群发。群发出去的内容你收不回，收到的人怎么用也不受你控制。'
+    consequence: '垃圾信息、钓鱼扩散、账号被标记为滥用。'
+    authority: ['CWE-799 交互频率控制不当', '中华人民共和国网络安全法 第 46 条']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: PG004
+    name: 复制自身到其他位置 / 设备
+    languages: [python, shell, javascript, typescript]
+    pattern: '(shutil\.copy\w*\(\s*(__file__|sys\.argv\[0\])|cp\s+["'']?\$0\b|copyFileSync\(\s*__filename|/media/|/Volumes/[^/\s]+/|removable|USB[^\n]*(copy|write)|\\\\\\\\[A-Za-z0-9_.-]+\\\\[A-Za-z$]+\\\\)'
+    severity: 严重
+    literal: 'shutil.copy(__file__, …)（复制（自身文件，目标））：把程序自己复制到别的地方'
+    plain: '程序把自己拷到 U 盘、网络共享、其他目录。这是蠕虫的基本动作：靠复制自己扩散。'
+    consequence: '自我传播，感染其他机器/设备。'
+    authority: ['MITRE ATT&CK T1091 通过可移动介质复制', 'CWE-506']
+    is_script: true
+    exploit_sensitive: true
+    disposition: 必须删除
+
+  - id: PG005
+    name: 自动安装 / 分发到其他项目
+    languages: [any]
+    pattern: '(\bnpm\s+(i|install)\s+-g\b|\bpip\s+install\s+[^\n]*--user\b[^\n]*\$|for\s+\w+\s+in\s+[^\n]*\*/\s*;\s*do[^\n]*(cp|install|git\s+push)|find\s+[^\n]*-name\s+["'']?package\.json["'']?[^\n]*-exec)'
+    severity: 高
+    literal: 'for d in */; do cp … （对每个目录：复制 …）：把某样东西批量塞进所有项目'
+    plain: '程序遍历你电脑上的所有项目，往每一个里面塞东西或推送。一次运行，到处留下痕迹。'
+    consequence: '批量污染其他项目；传播不可控。'
+    authority: ['MITRE ATT&CK T1195 供应链攻击']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: PG006
+    name: 自动发帖 / 自动关注 / 自动点赞
+    languages: [any]
+    pattern: '(?i)(api\.twitter\.com/[^\n]*(statuses/update|tweets)|graph\.facebook\.com[^\n]*feed|reddit\.com/api/submit|weibo\.com/2/statuses|\.(follow|like|retweet|repost|star|fork)\([^\n]*(for|while|map|each))'
+    severity: 中
+    literal: 'api.twitter.com/2/tweets（推特接口/发推）/ .follow() 在循环里（批量关注）：自动往社交平台发内容'
+    plain: '程序替你在社交平台自动发内容、批量关注、批量点赞。这是刷量/水军脚本的特征，平台会封号。'
+    consequence: '账号被封；内容传播不可控；可能违反平台规则和法律。'
+    authority: ['各平台服务条款（自动化行为限制）', '中华人民共和国网络安全法 第 12 条']
+    is_script: false
+    exploit_sensitive: false

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "file-reviewer": {
+      "command": "python3",
+      "args": ["-m", "servers.file_reviewer.server"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "MCP_SKILL_REPORT_DIR": "${userHome}/.mcp-skill/reports",
+        "MCP_SKILL_ROLLBACK_DIR": "${userHome}/.mcp-skill/rollback"
+      }
+    }
+  }
+}

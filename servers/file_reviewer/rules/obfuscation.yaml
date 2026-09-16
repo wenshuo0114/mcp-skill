@@ -1,0 +1,99 @@
+category_id: obfuscation
+category: 混淆与隐藏式代码
+description: 故意把代码写得看不懂：编码后再解码执行、超长单行、拆字拼接。正常业务代码几乎不需要这样写，出现即可疑。
+rules:
+  - id: OB001
+    name: base64 解码后执行
+    languages: [python]
+    pattern: '\b(exec|eval)\s*\(\s*(base64\.b64decode|codecs\.decode|bytes\.fromhex|zlib\.decompress|marshal\.loads)'
+    severity: 严重
+    literal: 'exec(base64.b64decode(…))（执行（base64.解码（…）））：先把一串乱码解回代码，再执行'
+    plain: '作者故意把真正要跑的代码编成一串看不懂的字母，运行时才还原。目的通常只有一个：不让你看见它到底干了什么。'
+    consequence: '隐藏的真实行为可能是后门、偷数据、挖矿。'
+    authority: ['CWE-506 嵌入的恶意代码', 'CWE-95 代码注入']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: OB002
+    name: JS 原子化/编码后执行
+    languages: [javascript, typescript]
+    pattern: '(eval|Function)\s*\(\s*(atob|Buffer\.from|unescape|decodeURIComponent|String\.fromCharCode)'
+    severity: 严重
+    literal: 'eval(atob(…))（求值（base64 解码（…）））：解码后当作 JS 执行'
+    plain: '同上，JavaScript 版本。'
+    consequence: '隐藏行为、后门。'
+    authority: ['CWE-506 嵌入的恶意代码']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: OB003
+    name: 大段 base64 常量
+    languages: [any]
+    pattern: '["''][A-Za-z0-9+/]{200,}={0,2}["'']'
+    severity: 中
+    literal: '"QUJD…=="（一大串 base64 字符）：长度超过 200 的编码常量'
+    plain: '代码里嵌了一大段编码数据。可能是图片、证书这类正常内容，也可能是被藏起来的代码。需要看它被谁用、用来做什么。'
+    consequence: '若被解码后执行，即为隐藏代码。'
+    authority: ['CWE-506 嵌入的恶意代码']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: OB004
+    name: 十六进制/Unicode 转义拼出的字符串
+    languages: [python, javascript, typescript]
+    pattern: '(\\x[0-9a-fA-F]{2}){6,}|(\\u[0-9a-fA-F]{4}){6,}'
+    severity: 中
+    literal: '"\x68\x74\x74\x70…"（十六进制转义字符串）：用编码方式写普通文字'
+    plain: '正常人不会把 "http" 写成 "\x68\x74\x74\x70"。这样写的目的是让搜索工具和人眼找不到关键字（比如网址、命令）。'
+    consequence: '隐藏关键字（网址、命令、密钥名），躲避审查。'
+    authority: ['CWE-506 嵌入的恶意代码']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: OB005
+    name: 通过 getattr / 字符串拼接调用敏感函数
+    languages: [python]
+    pattern: '\bgetattr\s*\(\s*(__builtins__|builtins|os|sys|subprocess)\s*,\s*[^)]*\+'
+    severity: 高
+    literal: 'getattr(os, "sys"+"tem")（取属性（操作系统，"sys"+"tem"））：把函数名拆开再拼起来调用'
+    plain: '把 system 拆成 "sys"+"tem" 写，唯一的目的是让搜索 "os.system" 的人找不到。'
+    consequence: '刻意躲避审查的危险调用。'
+    authority: ['CWE-506 嵌入的恶意代码']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: OB006
+    name: JS 方括号字符串拼接访问
+    languages: [javascript, typescript]
+    pattern: '\b(window|global|globalThis|process|require)\s*\[\s*["''][^"'']*["'']\s*\+'
+    severity: 高
+    literal: 'window["ev"+"al"]（窗口["ev"+"al"]）：拆字拼接访问危险函数'
+    plain: '同上，JavaScript 版本。'
+    consequence: '刻意躲避审查。'
+    authority: ['CWE-506']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: OB007
+    name: 超长单行代码
+    languages: [python, javascript, typescript, shell]
+    pattern: '^.{2000,}$'
+    severity: 低
+    literal: '（一行超过 2000 个字符）'
+    plain: '一行代码长到没法读。压缩过的第三方库是正常的；但如果是项目自己的源码，可能是故意压成一行藏东西。'
+    consequence: '无法人工审查这一行。'
+    authority: ['CWE-1078 代码可读性不足']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: OB008
+    name: 零宽/不可见 Unicode 字符
+    languages: [any]
+    pattern: '[\u200b\u200c\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069]'
+    severity: 高
+    literal: '（零宽空格 / 方向控制字符：肉眼看不见的字符）'
+    plain: '代码里有你看不见的字符。它们可以让显示出来的代码和实际执行的代码不一样（"木马源码"攻击），或藏在标识符里造成两个看起来一样的变量。'
+    consequence: '看到的不是跑的；审查被欺骗。'
+    authority: ['CWE-94 代码注入', 'CVE-2021-42574 Trojan Source']
+    is_script: false
+    exploit_sensitive: false

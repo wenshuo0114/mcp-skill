@@ -1,0 +1,123 @@
+category_id: dangerous_exec
+category: 危险执行
+description: 把字符串当代码跑、调用系统命令行、动态加载代码。这些是漏洞和后门最常见的落脚点。
+rules:
+  - id: DX001
+    name: Python eval
+    languages: [python]
+    pattern: '(?<![\w.])eval\s*\('
+    severity: 高
+    literal: 'eval(（求值 括号）：把括号里的字符串当作 Python 代码计算并执行'
+    plain: '相当于"你给我一句话，我不管是什么都照着做"。如果这句话来自用户输入、网络、文件，攻击者就能让程序做任何事。'
+    consequence: '任意代码执行：删文件、偷数据、装后门，权限等同运行这个程序的用户。'
+    authority: ['CWE-95 代码注入（Eval 注入）', 'OWASP A03:2021 注入']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: DX002
+    name: Python exec
+    languages: [python]
+    pattern: '(?<![\w.])exec\s*\('
+    severity: 高
+    literal: 'exec(（执行 括号）：把字符串当作多行 Python 代码执行'
+    plain: '比 eval 更宽，能跑整段程序。字符串从哪来决定了危险程度：写死在代码里还好，来自外部就是后门。'
+    consequence: '任意代码执行。'
+    authority: ['CWE-95 代码注入', 'OWASP A03:2021 注入']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: DX003
+    name: os.system 调系统命令
+    languages: [python]
+    pattern: '\bos\.(system|popen)\s*\('
+    severity: 高
+    literal: 'os.system(（操作系统.系统命令 括号）：把字符串交给系统命令行去执行'
+    plain: '相当于替你在终端里敲一条命令。如果命令里拼了用户输入，别人可以用分号、竖线接上自己的命令。'
+    consequence: '命令注入：攻击者在你的机器上执行任意系统命令。'
+    authority: ['CWE-78 操作系统命令注入', 'OWASP A03:2021 注入']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: DX004
+    name: subprocess 开启 shell
+    languages: [python]
+    pattern: '\bsubprocess\.\w+\([^)]*shell\s*=\s*True'
+    severity: 高
+    literal: 'subprocess.run(…, shell=True)（子进程.运行（…，壳=真））：通过系统命令行解释器执行命令'
+    plain: 'shell=True 意思是"让系统命令行帮我解释这串字"。这时空格、分号、反引号都有特殊含义，拼进用户输入就能被劫持。'
+    consequence: '命令注入。'
+    authority: ['CWE-78 操作系统命令注入']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: DX005
+    name: pickle / marshal 反序列化
+    languages: [python]
+    pattern: '\b(pickle|cPickle|marshal|dill|shelve)\.(load|loads)\s*\('
+    severity: 高
+    literal: 'pickle.loads(（腌菜.加载字符串 括号）：把一段二进制数据还原成 Python 对象'
+    plain: 'pickle 格式在"还原"时可以执行任意代码，所以加载来路不明的 pickle 数据等于运行别人的程序。'
+    consequence: '反序列化远程代码执行。'
+    authority: ['CWE-502 不可信数据反序列化', 'OWASP A08:2021 软件和数据完整性失效']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: DX006
+    name: yaml.load 未指定安全加载器
+    languages: [python]
+    pattern: '\byaml\.load\s*\((?![^)]*Loader\s*=\s*(yaml\.)?(Safe|Base)Loader)(?![^)]*safe)'
+    severity: 中
+    literal: 'yaml.load(（YAML.加载 括号）：解析 YAML 文本为对象，未指定安全加载器'
+    plain: '老版本的 yaml.load 可以在解析时构造任意 Python 对象，等于让 YAML 文件能执行代码。应改用 yaml.safe_load。'
+    consequence: '恶意 YAML 文件触发代码执行。'
+    authority: ['CWE-502 不可信数据反序列化']
+    is_script: false
+    exploit_sensitive: true
+
+  - id: DX007
+    name: JavaScript eval / Function 构造
+    languages: [javascript, typescript]
+    pattern: '(?<![\w.])(eval\s*\(|new\s+Function\s*\()'
+    severity: 高
+    literal: 'eval( / new Function((求值 / 新建 函数)：把字符串当作 JavaScript 代码执行'
+    plain: '和 Python 的 eval 一样，字符串从外部来就是任意代码执行。'
+    consequence: '任意代码执行；在浏览器里是 XSS，在 Node 里是服务器被控。'
+    authority: ['CWE-95 代码注入', 'OWASP A03:2021 注入']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: DX008
+    name: Node child_process 执行命令
+    languages: [javascript, typescript]
+    pattern: '\b(child_process|execSync|execFileSync|spawnSync)\b|\bexec\s*\(\s*[`"''].*\$\{'
+    severity: 高
+    literal: 'child_process（子 进程）/ exec(（执行 括号）：从 Node 里启动系统命令'
+    plain: '让 Node 程序去运行系统命令。命令字符串里如果拼了变量（${…}），就可能被注入。'
+    consequence: '命令注入、服务器被控。'
+    authority: ['CWE-78 操作系统命令注入']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: DX009
+    name: 定时器传字符串
+    languages: [javascript, typescript]
+    pattern: '\bset(Timeout|Interval)\s*\(\s*[''"`]'
+    severity: 中
+    literal: 'setTimeout("…")（设置 超时（字符串））：把字符串当作代码延时执行'
+    plain: '给定时器传字符串等同于 eval，应该传函数。'
+    consequence: '代码注入。'
+    authority: ['CWE-95 代码注入']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: DX010
+    name: 动态导入模块名来自变量
+    languages: [python]
+    pattern: '\b(__import__|importlib\.import_module)\s*\(\s*[^''")]'
+    severity: 中
+    literal: '__import__(变量)（导入（变量））：模块名不是写死的字符串，而是运行时决定'
+    plain: '程序在运行时才决定加载哪个模块。如果这个名字能被外部影响，就可能加载攻击者放进来的模块。'
+    consequence: '加载恶意模块、代码执行。'
+    authority: ['CWE-829 包含不可信控制域的功能']
+    is_script: true
+    exploit_sensitive: false

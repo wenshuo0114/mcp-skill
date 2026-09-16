@@ -1,0 +1,79 @@
+category_id: reference
+category: 文档 / 配置中的指向性引用
+description: .md / .txt / .json / .yaml 里指向 json、脚本、外部依赖、其他仓库的引用。只读核对：它指向的东西在仓库里存在吗？和代码一致吗？
+default_disposition: 建议修复
+rules:
+  - id: RF001
+    name: 文档引用本地 json / 脚本 / 配置文件
+    languages: [md, txt]
+    pattern: '(?<![\w/])((\./|\.\./|/)?[A-Za-z0-9_.\-/]+\.(json|ya?ml|toml|sh|py|js|ts|env|ini|cfg|lock))(?![\w.])'
+    severity: 低
+    literal: 'config.json / setup.sh（文档里提到的某个文件）'
+    plain: '文档说"看这个文件 / 用这个配置"。审查器会核对：这个文件在仓库里是否真的存在、内容是否和文档说的一致。不一致就如实报出来，不替作者圆。'
+    consequence: '文档与代码偏差：读者按文档做，实际跑的是另一回事。'
+    authority: ['CWE-1059 文档不足（相关）']
+    is_script: false
+    exploit_sensitive: false
+    check_exists: true
+
+  - id: RF002
+    name: 文档要求配置环境变量指向路径 / 密钥
+    languages: [md, txt, yaml, json]
+    pattern: '(?i)\b(export\s+)?[A-Z][A-Z0-9_]{3,}\s*=\s*["'']?(/|~|[A-Z]:\\\\|https?://|sk-|ghp_|AKIA)[^\s"'']*'
+    severity: 中
+    literal: 'export SOME_PATH=/home/xxx（导出 环境变量=某路径）'
+    plain: '文档让你把环境变量指向某个路径或填入密钥。要看：这个路径是不是作者机器上的；是不是让你把密钥写进文件。'
+    consequence: '指向性配置；可能诱导把密钥写进明文。'
+    authority: ['CWE-526 通过环境变量暴露敏感信息']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: RF003
+    name: 文档中的可点击外部链接
+    languages: [md, txt]
+    pattern: '\[[^\]]*\]\(\s*https?://(?!(github\.com|docs\.|developer\.|www\.w3\.org|example\.com|cursor\.com|modelcontextprotocol\.io|pypi\.org|npmjs\.com|nodejs\.org|python\.org))[^)\s]+\s*\)'
+    severity: 低
+    literal: '[文字](https://某网址)（Markdown 链接）'
+    plain: '文档里的外链。列出来让你确认：认识这个网址吗？点开会去哪？'
+    consequence: '钓鱼链接 / 引导下载。'
+    authority: ['CWE-601 开放重定向（类比）']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: RF004
+    name: 链接文字与实际网址不一致
+    languages: [md, html]
+    pattern: '\[\s*https?://([A-Za-z0-9.-]+)[^\]]*\]\(\s*https?://(?!\1)[^)\s]+\s*\)|<a\s+[^>]*href\s*=\s*["'']https?://([A-Za-z0-9.-]+)[^"'']*["''][^>]*>\s*https?://(?!\2)[A-Za-z0-9.-]+'
+    severity: 高
+    literal: '[https://安全网站](https://别的网站)（显示的是 A，点开是 B）'
+    plain: '链接上写的网址和实际跳转的网址不是同一个。这是钓鱼的标准写法。'
+    consequence: '读者被骗到假网站。'
+    authority: ['CWE-451 界面误导', 'OWASP 钓鱼防护']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 必须删除
+
+  - id: RF005
+    name: Markdown 内嵌图片指向外部追踪
+    languages: [md]
+    pattern: '!\[[^\]]*\]\(\s*https?://[^)\s]*(\?|&)(utm_|track|uid=|id=|ref=|token=)[^)\s]*\)'
+    severity: 低
+    literal: '![](https://…?uid=xxx)（图片 来源=带追踪参数的网址）'
+    plain: '图片网址带了追踪参数。每个打开这份文档的人都会向那个服务器报一次"我看了"。'
+    consequence: '读者被追踪。'
+    authority: ['CWE-359 私人信息暴露']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: RF006
+    name: 配置引用不存在的文件
+    languages: [json, yaml, toml]
+    pattern: '["''](\./|\.\./)?[A-Za-z0-9_.\-/]+\.(py|js|ts|sh|json|ya?ml|env)["'']'
+    severity: 低
+    literal: '"./scripts/run.sh"（配置里指向的文件）'
+    plain: '配置指向仓库里的某个文件。审查器会核对它是否存在；不存在就说明配置和实际不一致。'
+    consequence: '配置与代码偏差。'
+    authority: ['CWE-1059']
+    is_script: false
+    exploit_sensitive: false
+    check_exists: true
