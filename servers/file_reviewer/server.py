@@ -36,6 +36,7 @@ from . import repo_context as rc
 from . import rollback as rb
 from . import environment as envmod
 from . import path_kind as pk
+from . import neutralize as nz
 from .report import Report, REPORT_DIR
 
 INSTRUCTIONS = """文件审查器（只读）。使用顺序：review_open → review_scan（分批）→ 逐条按固定格式向用户解释并提问 → report_write_decision → 需要修改时先 rollback_create 再改 → report_write_fix。
@@ -656,6 +657,57 @@ def review_explain_paths(paths: list[str] | None = None, limit: int = 50) -> dic
             "提醒": "把“这是什么地方”和“如何到达”原样念给用户；写着“判断不了”的就说判断不了。不可达的停在那里，不帮绕过。"}
 
 
+_RULE_BY_ID = {r.id: r for r in _RULES}
+NEUTRALIZE_NO_BACKUP = "无害化：不留备份"
+
+
+def _finding_or_raise(finding_id: int) -> dict:
+    report = _report()
+    f = next((x for x in report.data["发现"] if x.get("发现编号") == finding_id), None)
+    if not f:
+        raise ValueError(f"报告里没有发现 #{finding_id}。先 review_scan。")
+    return f
+
+
+@_tool(read_only=True)
+def review_plan_neutralization(finding_id: int) -> dict[str, Any]:
+    """为某条发现算出“无害化（钉）”后的样子——只产出提案与差异预览，不写盘。
+    钉 = 就地清除可利用原文、写空值、加只读中文注释「已无害化，风险：X，不提供复现」；不是回滚点、不留可恢复副本。
+    返回：原行（高风险不回显、密钥打码）、无害化后文本、diff、是否需要重写（改动大要先告知并另开会话/子代理出方案）、
+    能否修复、隐藏字符检查、逐文件确认词。写入必须由用户以确认词授权后由助手手工完成，然后调用 review_verify_neutralized。"""
+    f = _finding_or_raise(finding_id)
+    rule = _RULE_BY_ID.get(f["规则ID"])
+    if not rule:
+        raise ValueError(f"规则 {f['规则ID']} 不在当前规则库里")
+    path = _inside_current_repo(Path(f["文件详细路径"]))
+    report = _report()
+    in_file = sum(1 for x in report.data["发现"] if x["文件详细路径"] == f["文件详细路径"])
+    proposal = nz.propose(path, int(f["行号"]), rule, findings_in_file=in_file)
+    proposal["发现编号"] = finding_id
+    proposal["下一步"] = (
+        "1. 把“原行（按回显策略）/ 无害化后 / 风险 / 能否修复 / 是否需要重写”念给用户；"
+        "2. 用户原话回复确认词后，助手用编辑工具只改这一处；"
+        "3. 立即 review_verify_neutralized(finding_id, expected_sha=sha256_无害化后(预期))；"
+        "4. review_references_of 查引用；5. report_write_fix(..., rollback_point=\"无害化：不留备份\")。"
+    )
+    return proposal
+
+
+@_tool(read_only=True)
+def review_verify_neutralized(finding_id: int, expected_sha: str = "") -> dict[str, Any]:
+    """无害化写入后的只读核对：原规则在该行不再命中、文件无零宽/双向控制字符、无害化注释在位、
+    未留可复原提示（如 base64 原文）、sha256 与提案预期一致。不通过就如实说不通过。"""
+    f = _finding_or_raise(finding_id)
+    rule = _RULE_BY_ID.get(f["规则ID"])
+    if not rule:
+        raise ValueError(f"规则 {f['规则ID']} 不在当前规则库里")
+    path = _inside_current_repo(Path(f["文件详细路径"]))
+    cur = _current_repo()
+    result = nz.verify(path, rule, int(f["行号"]), expected_sha or None, Path(cur["仓库根目录"]))
+    result["发现编号"] = finding_id
+    return result
+
+
 @_tool(read_only=True)
 def review_file_metadata(file: str) -> dict[str, Any]:
     """文件的创建日期、最近修改日期、首次/最后提交仓库日期、sha256，以及与报告中记录的审查时哈希是否一致。"""
@@ -723,7 +775,9 @@ def report_write_fix(file: str, before: str, after: str, review_content: str, fi
     """把一次修复写入报告：修复前后差异、风险级别、是否脚本、是否成功、不修复后果、立即/计划、权威性、回滚点。
     rollback_point 必填：没有回滚点的修复不予记录。"""
     if not rollback_point:
-        raise ValueError("缺少回滚点名称。修复前必须先 rollback_create，并把回滚点名称传进来。")
+        raise ValueError(f"缺少回滚点名称。普通修复先 rollback_create 并传回滚点名；无害化传 \"{NEUTRALIZE_NO_BACKUP}\"（需同时给 finding_id）。")
+    if rollback_point == NEUTRALIZE_NO_BACKUP and finding_id is None:
+        raise ValueError("无害化记录必须带 finding_id，报告里才能对上是哪条发现被钉。")
     p = _inside_current_repo(Path(file).expanduser())
     cur = _current_repo()
     meta = rc.file_metadata(p, cur["仓库根目录"]) if p.exists() else {}
@@ -735,6 +789,11 @@ def report_write_fix(file: str, before: str, after: str, review_content: str, fi
     is_cred = _is_credential_file(p)
     before = _redact_text(before, lang, credential_file=is_cred)
     after = _redact_text(after, lang, credential_file=is_cred)
+    if rollback_point == NEUTRALIZE_NO_BACKUP:
+        f = _finding_or_raise(finding_id)
+        rule = _RULE_BY_ID.get(f["规则ID"])
+        if rule and (rule.exploit_sensitive or rule.category_id == "secrets" or rule.severity == "严重" or rule.disposition == "必须删除"):
+            before = f"[无害化记录不保存原文：{f['规则ID']} {f['风险名称']}，高风险/密钥不回显]"
     rec = report.record_fix(
         finding_id, str(p), before, after, 审查内容=review_content, 修复内容=fix_content,
         是否存在风险=risk_level, 是否存在脚本=has_script, 是否成功修复=fixed_ok,
@@ -800,8 +859,13 @@ def review_queue_next() -> dict[str, Any]:
 # ---------------- 回滚点 ----------------
 
 @_tool(read_only=False)
-def rollback_create(files: list[str], name: str = "", note: str = "") -> dict[str, Any]:
-    """修改任何文件之前调用：把这些文件备份成一个有名字的回滚点（存放在被审查仓库之外），并把名字钉在报告里。"""
+def rollback_create(files: list[str], name: str = "", note: str = "", purpose: str = "普通修复") -> dict[str, Any]:
+    """普通修复之前调用：把这些文件备份成一个有名字的回滚点（存放在被审查仓库之外）。
+    purpose 只能是“普通修复”。恶意/可利用项的处置走 review_plan_neutralization（无害化不留备份——
+    给恶意样本留可恢复副本等于留着它可被还原利用）；传“无害化”“恶意”等会被拒绝。"""
+    if any(k in purpose for k in ("无害化", "恶意", "钉")):
+        raise PermissionError("恶意/可利用项不建回滚备份：备份 = 可被还原再利用。请走 review_plan_neutralization → 用户确认 → 手工无害化 → review_verify_neutralized，"
+                              f"report_write_fix 的 rollback_point 传 \"{NEUTRALIZE_NO_BACKUP}\"。")
     cur = _current_repo()
     paths = [_inside_current_repo(Path(f).expanduser()) for f in files]
     cred = [str(p) for p in paths if _is_credential_file(p)]
