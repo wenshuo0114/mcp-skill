@@ -97,7 +97,7 @@ def test_writes_only_go_outside_reviewed_repo():
         for m in re.finditer(r"\.write_text\(|\.write_bytes\(|open\([^)]*[\"'][wa]", src):
             line_no = src[: m.start()].count("\n") + 1
             ctx = "\n".join(src.splitlines()[max(0, line_no - 12): line_no])
-            assert any(k in ctx for k in ("REPORT_DIR", "STATE_DIR", "ROLLBACK_DIR", "_repo_dir", "repo_root / ", "dest", "self.path", "self.json_path", "state_path", "meta_path", "backup", "point_dir")), \
+            assert any(k in ctx for k in ("REPORT_DIR", "STATE_DIR", "ROLLBACK_DIR", "_repo_dir", "repo_root / ", "dest", "self.path", "self.json_path", "state_path", "meta_path", "backup", "point_dir", "_scopes_dir")), \
                 f"{py.name}:{line_no} 有写盘但上下文看不出写到报告/状态/回滚目录：\n{ctx}"
 
 
