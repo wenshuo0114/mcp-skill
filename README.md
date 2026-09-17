@@ -50,7 +50,7 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 | `MCP_SKILL_LARGE_FILES` / `MCP_SKILL_LARGE_LINES` | `200` / `50000` | 大项目阈值，超过先出摘要 |
 | `MCP_SKILL_STRICT` | 空 | 设为 `1` 时默认严格模式：不跳过任何目录（见下文） |
 
-## 工具清单（18 + 2）
+## 工具清单（22 + 2）
 
 | 工具 | 只读 | 作用 |
 |---|---|---|
@@ -60,15 +60,38 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 | `review_references_of(symbol)` | 是 | 找一个符号 / 文件名 / 地址在仓库内的全部引用位置，供删除高风险项时连根处置、验证不可再利用 |
 | `review_file_metadata(file)` | 是 | 创建 / 修改 / 首次提交 / 最后提交日期、sha256、与审查时是否一致 |
 | `review_external_paths()` | 是 | 找指向其他仓库 / 路径变量 / git 地址的引用，返回必须转达的三选一 |
-| `review_scope(mode, path, strict, confirm, include_other_users, max_files)` | 是 | **审查范围四选一**：`文件` / `文件夹` / `整仓` / `整盘`，任意位置、不限白名单。整盘需 `confirm="✅ 授权只读扫描整盘"`，默认跳过其他用户家目录（包含需另一句确认）；只跳 `/proc /sys /dev /run`，不跟符号链接，无权限目录如实报数 |
+| `review_scope(mode, path, strict, confirm, include_other_users, max_files, owner_confirm)` | 是 | **审查范围四选一**：`文件` / `文件夹` / `整仓` / `整盘`，任意位置、不限白名单。整盘先反问真实性（`owner_confirm="✅ 这台机器是我的，我有权限，继续"`），再 `confirm="✅ 授权只读扫描整盘"`；默认跳过其他用户家目录（包含需另一句确认）；只跳 `/proc /sys /dev /run`，不跟符号链接，无权限目录如实报数 |
+| `review_explain_paths(paths, limit)` | 是 | 解释路径"在哪台机器、什么地方、怎么到"：Git 仓库副本（远程在 GitHub/GitLab/Gitee/…）、部署到 Cloudflare/Vercel 等的网页、VPS 系统目录、你的/他人用户目录、WSL 下的 Windows 盘、外部挂载、机器本身是虚拟机/容器；文件名中文含义；只给现有权限内的到达方法。判断不了就写判断不了 |
+| `review_persistence_inventory(scan, max_files_per_location)` | 是 | 按 OS 列已知持久化位置（cron、systemd/launchd、启动文件夹、shell 启动脚本、`ld.so.preload`、浏览器配置与企业策略、`authorized_keys`、`hosts`…）：存在/可达/文件数，逐行扫描。**只看文件**，运行态附官方命令让你自己跑；附「凭据轮换根治法」 |
+| `review_plan_neutralization(finding_id)` | 是 | 无害化（钉）提案：清原文 + 空值 + 只读中文注释「已无害化，风险：X，不提供复现」的样子与 diff；严重级/必须删除/密钥原文不回显；能否修复、是否需要重写、隐藏字符检查、逐文件确认词。**只算不写** |
+| `review_verify_neutralized(finding_id, expected_sha)` | 是 | 无害化写入后核对：原规则不再命中、无零宽/双向控制字符、注释在位、未留可复原提示、sha256 一致 |
 | `review_user_level_configs(extra_paths, offset, limit)` | 是 | 常见位置快捷方式：`~/.cursor` `~/.claude` `~/.codex` `~/.gemini` `~/.vscode` `/opt/*` 等（含 Windows 路径），独立报告。不是范围上限 |
 | `review_secrets_inventory(include_user_level)` | 是 | 密钥 / 私钥 / 凭证 / 环境变量清单：路径、行号、变量名、日期、git 跟踪、引用次数、停用判断。**不报值** |
 | `report_set_header` / `report_write_decision` / `report_write_fix` / `report_external_choice` / `report_path` | 写报告 | 报告头部、用户决定、修复记录（前后 diff，必须带回滚点名）、外部引用选择、报告路径 |
 | `review_queue_add` / `review_queue_list` / `review_queue_next` | 写状态 | 计划审查列表 |
-| `rollback_create(files, name, note)` / `rollback_list()` | 写备份 | 修复前备份、钉名 |
+| `rollback_create(files, name, note, purpose)` / `rollback_list()` | 写备份 | **普通修复**前备份。`purpose` 含"无害化/恶意"会被拒绝：恶意内容不建备份 |
 | `rollback_restore(name, confirm)` | **写仓库** | 点名恢复；必须 `confirm="用户已授权恢复 <名>"` |
 
-"写"的都写在被审查仓库**之外**；唯一会改仓库内文件的是 `rollback_restore`，且要确认词。没有任何执行命令的工具。
+"写"的都写在被审查仓库**之外**；唯一会改仓库内文件的是 `rollback_restore`，且要确认词。没有任何执行命令的工具。无害化的实际写入由助手用普通编辑工具在你逐文件确认后完成，随后必须 `review_verify_neutralized`。
+
+## 环境真实性：只报信号，不谎称核实
+
+`review_open` 和 `review_scope` 返回「环境来源」：从 `/proc/cpuinfo` 的 hypervisor 位、DMI 厂商、cgroup、mountinfo、WSL 标志、Windows 注册表来宾键读出**信号**——例如 `虚拟机内（Hyper-V（微软））`、`容器内（套在虚拟机里）`、`厂商查不出`。**来宾无法自证宿主**是不是真实系统，这一条永远写在「查不出的」里。要核宿主，返回里有微软 `Get-ComputerInfo` / `systemd-detect-virt` 等官方命令原文，你自己在宿主上跑；审查器不代跑、不解析。
+
+整盘扫描前工具先反问：这台机器是你的吗、有管理员权限吗、知道自己在虚拟机/容器里吗、整盘在虚拟机里 = 虚拟机的盘不是宿主的盘。你原话回复 `✅ 这台机器是我的，我有权限，继续` 才继续。
+
+权限边界：只在你现有读权限内工作。读不到（无权限、不存在、属于其他用户）就停并说原因，不提权、不绕过、不建议 `sudo`。要求提权口令、绕过方法、进别人的机器：拒绝。
+
+## 钉（无害化）：不是回滚点，不留备份
+
+对恶意/可利用项，"钉"= 就地清除原文、写空值、加只读中文注释「已无害化，风险：X，不提供复现」。**不建回滚备份**——备份等于留着它被还原再利用。流程：`review_plan_neutralization` 出提案（只算不写，高风险原文不回显，说明能否修复、是否需要重写）→ 你原话 `✅ 授权无害化 <文件名> 第N行` → 助手只改这一处 → `review_verify_neutralized` 核对（规则不再命中、无隐藏字符、未留可复原提示、哈希一致）→ `review_references_of` 查引用逐个同样处理 → `report_write_fix(rollback_point="无害化：不留备份", finding_id=…)`。
+
+你说"不修改、不删除"：不动，只把不动的后果写进报告。机器已售出 / VPS 登不上 / 目录属于别人：**不回去清**，走「凭据轮换根治法」——换掉它能拿到的一切凭据、通过服务商控制台重装，残留就成了没用的字节。
+
+## 教学文档
+
+- `docs/路径类型入门.md`：`~/.grok`、`/home/x/.codex`、`C:\Users\x\.vscode` 这类路径在哪台机器、什么地方、怎么打开；虚拟机/WSL/容器/VPS/云仓库怎么分。
+- `docs/漏洞上报入门.md`：问题在谁的代码里、协调披露 90 天流程、`SECURITY.md` / GitHub 私密 advisory / MSRC / CNVD 渠道、表单归类与 CWE 对照、中文用户的编码与语言坑。只讲流程，不含复现。
 
 ## 审查范围：四选一，由你选
 
@@ -96,7 +119,7 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 
 `tests/test_no_propagation.py` 检查审查器自身：不引入任何联网模块、没有 `eval/exec/os.system` 之类动态执行、`subprocess` 只在 `repo_context._git` 一处且 git 子命令限定在只读白名单（`push` `fetch` `pull` `commit` `remote add` `config <k> <v>` 一律 `PermissionError`）、调 git 时禁用钩子、写盘只写报告/状态/回滚目录、干净仓库的报告里没有任何 URL / 图片 / 脚本。
 
-## 规则库（12 类 100 条）
+## 规则库（12 类 104 条）
 
 `servers/file_reviewer/rules/*.yaml`，每条含：正则、语言、级别、处置、中文直译、白话、后果、权威依据（CWE / OWASP / MITRE ATT&CK / 法规）。
 
@@ -107,7 +130,7 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 | remote_exec | `curl \| sh`、下载后执行、pip 从 URL 装、npx 远程、PowerShell 下载执行 |
 | obfuscation | base64 解码后执行、十六进制转义、拆字拼接、零宽字符、超长单行 |
 | privacy | 读 `~/.ssh`、云 / Git 凭据、浏览器密码库、键盘记录、剪贴板、摄像头、整包外传环境变量、Windows 凭据管理器 |
-| intrusion | 反弹 shell、0.0.0.0 监听、crontab、启动项、Git 钩子、关防火墙、改 hosts、自删、Windows 注册表 Run / WMI / 服务 / PowerShell 绕过 |
+| intrusion | 反弹 shell、0.0.0.0 监听、crontab、启动项、Git 钩子、关防火墙、改 hosts、自删、Windows 注册表 Run / WMI / 服务 / PowerShell 绕过、`LD_PRELOAD` / `ld.so.preload` 注入、浏览器策略/扩展固化、主页/搜索/代理劫持、定时器/自动重启/定时开端口 |
 | dependency | postinstall 脚本、git / URL 依赖、`*` 版本、setup.py 自定义安装、拼写仿冒包、绝对路径、跳出仓库的 `../`、子模块、`.pth` 自动执行、`.hg/.svn` 钩子 |
 | network | 关证书校验、硬编码公网 IP、明文 http、向外 POST、匿名投递服务、CORS `*` |
 | propagation | 自动 push / publish、自动 fork / 建仓、群发、复制自身、批量塞进所有项目、自动发帖 |
@@ -123,7 +146,7 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 
 ## 报告
 
-每个仓库一份 `~/.mcp-skill/reports/<仓库名>.md`（换仓库自动新建）。头部：简介、重点、摘要、最近修改更新日期。下方：最新审查（文件名、修复日期、创建日期、修改日期、提交日期、一致性）、发现清单、修复记录（前后 diff、风险级别、是否脚本、是否成功、不修复后果、立即/计划、权威性、回滚点）、凭据清单、外部路径与待审队列、切换记录。
+每个仓库一份 `~/.mcp-skill/reports/<仓库名>.md`（换仓库自动新建）。头部：简介、重点、摘要、最近修改更新日期。下方：环境来源（只是信号，不是核实结论）、最新审查（文件名、修复日期、创建日期、修改日期、提交日期、一致性）、发现清单、修复记录（前后 diff、风险级别、是否脚本、是否成功、不修复后果、立即/计划、权威性、回滚点或"无害化：不留备份"）、凭据清单、持久化位置清单、路径与位置说明、外部路径与待审队列、切换记录。
 
 ## 审查器审自己：如实说
 
@@ -138,11 +161,11 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 ## 目录
 
 ```
-servers/file_reviewer/   MCP 服务器（scanner / repo_context / report / rollback / server + rules/*.yaml）
+servers/file_reviewer/   MCP 服务器（scanner / repo_context / report / rollback / environment / path_kind / persistence / neutralize / server + rules/*.yaml）
 skills/code-review/      审查流程技能（中文）
 skills/code-teaching/    代码直译教学技能（中文）
 rules/                   三条硬规矩
-docs/                    上传前自查清单
+docs/                    上传前自查清单、路径类型入门、漏洞上报入门
 tests/                   pytest
 ```
 
