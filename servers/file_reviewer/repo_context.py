@@ -26,7 +26,20 @@ LARGE_PROJECT_LINES = int(os.environ.get("MCP_SKILL_LARGE_LINES", "50000"))
 _GIT_SAFE = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
 
 
+# 审查器只允许这些只读 git 子命令。push / fetch / pull / remote add / commit / config --set 等一律不在其中：
+# 这是“严禁传播”的代码级保证，不是口头承诺。
+_GIT_READONLY_ALLOW = frozenset({"rev-parse", "log", "ls-files", "check-ignore", "config", "remote", "status", "diff", "show"})
+
+
 def _git(args: list[str], cwd: Path) -> str | None:
+    if not args or args[0] not in _GIT_READONLY_ALLOW:
+        raise PermissionError(f"审查器禁止执行 git {args[0] if args else ''}：只允许只读子命令 {sorted(_GIT_READONLY_ALLOW)}")
+    if args[0] == "config" and any(a in ("--add", "--unset", "--replace-all", "--edit", "-e") for a in args):
+        raise PermissionError("审查器禁止写 git config")
+    if args[0] == "config" and len([a for a in args[1:] if not a.startswith("-")]) >= 2:
+        raise PermissionError("审查器禁止写 git config（config <key> <value> 形式）")
+    if args[0] == "remote" and len(args) > 1 and args[1] not in ("-v", "show", "get-url"):
+        raise PermissionError("审查器禁止改 git remote")
     try:
         out = subprocess.run(
             _GIT_SAFE + args, cwd=str(cwd), capture_output=True, text=True, timeout=15,
@@ -125,13 +138,13 @@ def consistency_check(path: Path | str, recorded_sha256: str) -> dict:
     }
 
 
-def inventory(root: Path | str) -> dict:
-    """只统计实际存在的文件，不读 README 之类的文字介绍。"""
+def inventory(root: Path | str, strict: bool | None = None) -> dict:
+    """只统计实际存在的文件，不读 README 之类的文字介绍。strict=True 不跳过任何目录。"""
     root = Path(root).resolve()
     files: list[dict] = []
     total_lines = 0
     by_lang: dict[str, int] = {}
-    for p in iter_source_files(root):
+    for p in iter_source_files(root, strict):
         lang = detect_language(p)
         if is_probably_binary(p):
             lines = 0
@@ -207,7 +220,7 @@ _EXTERNAL_PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 
-def find_external_paths(root: Path | str) -> list[dict]:
+def find_external_paths(root: Path | str, strict: bool | None = None) -> list[dict]:
     root = Path(root).resolve()
     results: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -224,7 +237,7 @@ def find_external_paths(root: Path | str) -> list[dict]:
                 results.append({"类型": "git子模块", "来源文件": str(gitmodules), "行号": n,
                                 "引用": m2.group(1), "子模块名": cur_name, "是否指向仓库外": True})
 
-    for p in iter_source_files(root):
+    for p in iter_source_files(root, strict):
         if is_probably_binary(p):
             continue
         try:
@@ -332,11 +345,12 @@ def _git_ignored(root: Path, rel: str) -> bool | None:
     return r is not None
 
 
-def secrets_inventory(root: Path | str, rules: list[Rule] | None = None, max_ref_files: int = 2000) -> dict:
+def secrets_inventory(root: Path | str, rules: list[Rule] | None = None, max_ref_files: int = 2000,
+                      strict: bool | None = None) -> dict:
     root = Path(root).resolve()
     rules = [r for r in (rules or load_rules()) if r.category_id == "secrets"]
     is_git = (root / ".git").exists()
-    files = list(iter_source_files(root))
+    files = list(iter_source_files(root, strict))
     entries: list[dict] = []
 
     # 先缓存文本内容，供引用计数
