@@ -34,6 +34,8 @@ except ImportError:  # mcp 1.x
 from . import scanner as sc
 from . import repo_context as rc
 from . import rollback as rb
+from . import environment as envmod
+from . import path_kind as pk
 from .report import Report, REPORT_DIR
 
 INSTRUCTIONS = """文件审查器（只读）。使用顺序：review_open → review_scan（分批）→ 逐条按固定格式向用户解释并提问 → report_write_decision → 需要修改时先 rollback_create 再改 → report_write_fix。
@@ -193,6 +195,11 @@ def review_open(path: str, strict: bool | None = None) -> dict[str, Any]:
     state["当前范围"] = None
     rc.save_state(state)
     report = Report(info.仓库名, info.仓库根目录)
+    env_info = envmod.detect_environment()
+    report.set_environment(env_info)
+    state = rc.load_state()
+    state["环境来源"] = {k: env_info[k] for k in ("位置判断", "是否虚拟机", "虚拟机厂商", "是否容器", "是否WSL", "当前用户", "是否root或管理员", "主机名")}
+    rc.save_state(state)
     inv = rc.inventory(info.仓库根目录, strict)
     cred_files = [f["path"] for f in inv["文件清单"] if rc._CREDENTIAL_FILE.search(f["path"])]
 
@@ -230,6 +237,8 @@ def review_open(path: str, strict: bool | None = None) -> dict[str, Any]:
                      "如需读取，请回复“✅ 授权只读密钥文件 <文件名>”。")
     return {
         "仓库": info.__dict__,
+        "环境来源": {k: env_info[k] for k in ("位置判断", "是否虚拟机", "虚拟机厂商", "是否容器", "是否WSL", "当前用户", "是否root或管理员", "查不出的")},
+        "仓库位置说明": pk.classify_path(Path(info.仓库根目录), env_info),
         "切换": switch,
         "严格模式": strict,
         "目录跳过说明": skipped_note,
@@ -301,11 +310,13 @@ _DISK_CONFIRM_OTHERS = "✅ 授权只读扫描整盘，含其他用户目录"
 
 @_tool(read_only=True)
 def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = "",
-                 include_other_users: bool = False, max_files: int = 0) -> dict[str, Any]:
+                 include_other_users: bool = False, max_files: int = 0, owner_confirm: str = "") -> dict[str, Any]:
     """选定审查范围，四选一由用户决定：mode = "文件" | "文件夹" | "整仓" | "整盘"。
     - 文件 / 文件夹：path 指向任意位置，不限于当前仓库、不限于白名单。
     - 整仓：path 所在 git 仓库的根，等同 review_open(strict=True) 并缓存文件清单。
-    - 整盘：Linux/macOS 从 / 起、Windows 所有盘符；需要 confirm="✅ 授权只读扫描整盘"。
+    - 整盘：Linux/macOS 从 / 起、Windows 所有盘符；需要 confirm="✅ 授权只读扫描整盘"，
+      且需要用户先核对真实性（这台机器是你的？你是管理员？你知道自己在虚拟机/容器里？扫描根可达？）并回复
+      owner_confirm="✅ 这台机器是我的，我有权限，继续"。审查器只报它看到的信号，绝不宣称“已核实”。
       默认跳过其他用户的家目录（别人的目录是别人的隐私）；include_other_users=True 需要
       confirm="✅ 授权只读扫描整盘，含其他用户目录"，且只应在这台机器完全属于你、或你对它有管理职责时使用。
       只跳伪文件系统（/proc /sys /dev /run）；不跟随符号链接；设备、管道、套接字不读。
@@ -315,8 +326,17 @@ def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = 
     if mode not in rc.SCOPE_MODES:
         raise ValueError(f"mode 必须是 {list(rc.SCOPE_MODES)} 之一，收到：{mode!r}")
     notes: list[str] = []
+    env_info = envmod.detect_environment()
     if mode == "整盘":
         expected = _DISK_CONFIRM_OTHERS if include_other_users else _DISK_CONFIRM
+        if owner_confirm.strip() != envmod.AUTHENTICITY_CONFIRM:
+            return {
+                "需要核对真实性": True,
+                "说明": "整盘之前，先请你核对下面几件事。我不替你判断这台机器是谁的、你有没有权限——我只能报我看到的信号，"
+                      "而且来宾里的程序无法证明宿主是真的（这一项我无能为力，只能给你官方命令自己跑）。",
+                **envmod.authenticity_questions(env_info, [str(r) for r in rc.disk_roots()]),
+                "如何继续": f"核对无误后，同时传 owner_confirm=\"{envmod.AUTHENTICITY_CONFIRM}\" 和 confirm=\"{expected}\"。",
+            }
         if confirm.strip() != expected:
             return {
                 "需要授权": True,
@@ -359,6 +379,7 @@ def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = 
     state["当前仓库"] = {"仓库名": name, "仓库根目录": root_str, "严格模式": strict, "范围模式": mode,
                      "是否git仓库": (Path(root_str) / ".git").exists()}
     state["当前范围"] = {"模式": mode, **enum}
+    state["环境来源"] = {k: env_info[k] for k in ("位置判断", "是否虚拟机", "虚拟机厂商", "是否容器", "是否WSL", "当前用户", "是否root或管理员", "主机名")}
     if prev and prev.get("仓库名") != name:
         state.setdefault("历史仓库", []).append(prev)
     rc.save_state(state)
@@ -366,6 +387,7 @@ def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = 
     files = rc.load_scope_files(enum["文件清单文件"])
     cred = [str(f) for f in files if rc._CREDENTIAL_FILE.search(str(f))]
     report = Report(name, root_str)
+    report.set_environment(env_info)
     report.set_header(
         简介=f"范围模式「{mode}」的只读审查（{'严格：不跳过任何目录' if strict else '默认：跳过依赖与缓存目录'}）。根：{enum['根路径']}",
         摘要={"文件数": enum["文件数"], "严格模式": strict, "范围模式": mode, "已截断": enum["已截断"],
@@ -374,8 +396,11 @@ def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = 
     )
     saved = report.save()
     large = enum["文件数"] > rc.LARGE_PROJECT_FILES
+    if mode == "整盘" and (env_info["是否虚拟机"] or env_info["是否容器"] or env_info["是否WSL"]):
+        notes.append(f"提醒：你现在在 {env_info['位置判断']}。这次整盘扫的是它的盘，不是宿主机的盘。")
     return {
         "范围": state["当前范围"],
+        "环境来源": {k: env_info[k] for k in ("位置判断", "是否虚拟机", "虚拟机厂商", "是否容器", "是否WSL", "当前用户", "是否root或管理员", "查不出的")},
         "是否大范围": large,
         "说明": notes,
         "密钥文件告知": (f"发现 {len(cred)} 个密钥/凭据类文件（前 50）：{cred[:50]}。读取前必须先得到你的中文确认；读取后只显示变量名，值一律隐去。"
@@ -529,6 +554,41 @@ def review_references_of(symbol: str, limit: int = 200) -> dict[str, Any]:
         "提醒": "处置高风险项时：先 rollback_create 钉回滚点，再逐个把这些引用位置告诉用户，得到授权后再改。"
               "删除主体但留下引用 = 风险可被再次拼回。",
     }
+
+
+@_tool(read_only=True)
+def review_explain_paths(paths: list[str] | None = None, limit: int = 50) -> dict[str, Any]:
+    """给不熟悉路径的人解释“这个文件在什么地方”：git 仓库（哪个平台）/ 云仓库 / 部署到 Cloudflare 等的网页 /
+    VPS 系统目录 / 你的用户目录 / 其他用户目录 / 本机虚拟机或容器 / 通过挂载触达的远程宿主；文件名中文含义；
+    当前用户能否到达、怎么到达（只在现有权限内，不提权不绕过）。paths 为空时取报告里有发现的文件。写入报告「路径与位置说明」。"""
+    cur = _current_repo()
+    report = _report()
+    env_info = envmod.detect_environment()
+    if not paths:
+        seen: dict[str, int] = {}
+        for f in report.data["发现"]:
+            seen[f["文件详细路径"]] = seen.get(f["文件详细路径"], 0) + 1
+        targets = [(Path(k), v) for k, v in list(seen.items())[:limit]]
+    else:
+        counts: dict[str, int] = {}
+        for f in report.data["发现"]:
+            counts[f["文件详细路径"]] = counts.get(f["文件详细路径"], 0) + 1
+        targets = []
+        for raw in paths[:limit]:
+            p = Path(raw).expanduser()
+            try:
+                p = _inside_current_repo(p)
+            except ValueError:
+                pass  # 解释路径不需要在范围内：只判断位置与可达性，不读内容
+            targets.append((p, counts.get(str(p))))
+    notes = []
+    for p, n in targets:
+        lang = sc.detect_language(p) if p.is_file() else None
+        notes.append(pk.classify_path(p, env_info, findings_count=n, language=lang))
+    report.set_path_notes(notes)
+    saved = report.save()
+    return {"环境来源": env_info["位置判断"], "说明": notes, "报告": saved,
+            "提醒": "把“这是什么地方”和“如何到达”原样念给用户；写着“判断不了”的就说判断不了。不可达的停在那里，不帮绕过。"}
 
 
 @_tool(read_only=True)

@@ -45,6 +45,8 @@ def _empty(repo_name: str, repo_root: str) -> dict:
         "外部路径": [],
         "待审队列": [],
         "切换记录": [],
+        "环境来源": {},
+        "路径说明": [],
     }
 
 
@@ -143,6 +145,22 @@ class Report:
                 pass
         return rec
 
+    def set_environment(self, env_info: dict) -> None:
+        """环境来源：只记信号，不记结论。官方核对命令一并留档，供用户自己跑。"""
+        keep = ("操作系统", "内核", "主机名", "当前用户", "uid", "是否root或管理员", "位置判断", "是否虚拟机", "虚拟机厂商",
+                "是否容器", "是否WSL", "能触达外部的挂载", "依据", "查不出的", "红线", "官方核对命令(你自己在宿主上跑)")
+        self.data["环境来源"] = {k: env_info.get(k) for k in keep if k in env_info}
+        self.data["环境来源"]["记录时间"] = now_iso()
+        self.data["最近修改更新日期"] = now_iso()
+
+    def set_path_notes(self, notes: list[dict]) -> None:
+        """路径与位置说明：按路径去重合并。"""
+        existing = {n.get("路径"): n for n in self.data.get("路径说明", [])}
+        for n in notes:
+            existing[n.get("路径")] = n
+        self.data["路径说明"] = list(existing.values())
+        self.data["最近修改更新日期"] = now_iso()
+
     def add_external_paths(self, items: list[dict]) -> None:
         seen = {(e.get("类型"), e.get("引用")) for e in self.data["外部路径"]}
         for it in items:
@@ -198,6 +216,34 @@ class Report:
         else:
             w("（尚未生成）")
         w("")
+        envd = d.get("环境来源") or {}
+        if envd:
+            w("## 环境来源（只是信号，不是核实结论）")
+            w("")
+            for k in ("位置判断", "操作系统", "内核", "主机名", "当前用户", "uid", "是否root或管理员", "是否虚拟机", "虚拟机厂商", "是否容器", "是否WSL"):
+                if k in envd:
+                    w(f"- {k}：{_fmt(envd.get(k))}")
+            if envd.get("能触达外部的挂载"):
+                w("- 能触达当前系统之外的挂载：")
+                for m in envd["能触达外部的挂载"]:
+                    w(f"  - `{m.get('挂载点')}`（{m.get('含义')}，来源 `{m.get('来源')}`）")
+            if envd.get("依据"):
+                w("- 依据：")
+                out.extend(f"  - {x}" for x in envd["依据"])
+            if envd.get("查不出的"):
+                w("- 查不出的（如实停在这里）：")
+                out.extend(f"  - {x}" for x in envd["查不出的"])
+            cmds = envd.get("官方核对命令(你自己在宿主上跑)") or {}
+            if cmds:
+                w("- 官方核对命令（审查器不代跑，请你自己在宿主上跑后对照）：")
+                for grp, items in cmds.items():
+                    if isinstance(items, list):
+                        w(f"  - {grp}")
+                        out.extend(f"    - `{c}`" for c in items)
+                    else:
+                        w(f"  - {grp}：{items}")
+            w(f"- 记录时间：{envd.get('记录时间')}")
+            w("")
         w("## 最新审查")
         if d["最新审查"]:
             w("| 文件名 | 文件详细路径 | 文件创建日期 | 最近修改日期 | 首次提交仓库 | 最后提交仓库 | 审查时间 | 一致性 |")
@@ -278,6 +324,21 @@ class Report:
                         "类型", "文件详细路径", "行号", "变量名", "文件创建日期", "最近修改日期",
                         "最后提交仓库日期", "是否被git跟踪", "是否被gitignore忽略", "仓库内引用次数", "停用判断")) + " |")
             w("")
+        notes = d.get("路径说明") or []
+        if notes:
+            w(f"## 路径与位置说明（共 {len(notes)} 条；给不熟悉路径的人看）")
+            w("")
+            for n in notes:
+                w(f"### `{n.get('路径')}`")
+                for k in ("文件名中文含义", "这是什么地方", "位置判断依据", "仓库/平台", "当前用户可达", "不可达原因", "内容解释"):
+                    if n.get(k) not in (None, "", [], {}):
+                        w(f"- {k}：{_fmt(n.get(k))}")
+                how = n.get("如何到达") or {}
+                if how:
+                    w("- 如何到达（只在你现有权限内，不提权不绕过）：")
+                    for k, v in how.items():
+                        w(f"  - {k}：`{v}`" if isinstance(v, str) else f"  - {k}：{_fmt(v)}")
+                w("")
         w("## 外部路径与待审队列")
         if d["外部路径"]:
             w("| 类型 | 引用 | 来源文件 | 行号 | 指向仓库外 | 用户选择 |")
