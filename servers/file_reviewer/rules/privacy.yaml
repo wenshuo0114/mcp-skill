@@ -1,0 +1,130 @@
+category_id: privacy
+category: 隐私采集与外传
+description: 读取本机或他人的私人数据（凭据、剪贴板、按键、摄像头、通讯录、浏览器数据），或把这些数据发到外面。不论作者是否声称"官方授权"，都要如实告知。
+default_disposition: 必须修复
+rules:
+  - id: PR001
+    name: 触碰 SSH 钥匙目录
+    languages: [any]
+    pattern: '\.ssh[/\\](id_rsa|id_ed25519|id_ecdsa|id_dsa|authorized_keys|known_hosts|config)\b|[/\\~]\.ssh[/\\"'']'
+    severity: 严重
+    literal: '~/.ssh/id_rsa（用户目录/.ssh/私钥文件）：SSH 登录钥匙所在位置'
+    plain: '程序去碰你的 SSH 钥匙目录。除了 SSH 客户端本身，几乎没有正常程序需要读这里。'
+    consequence: '服务器登录钥匙被偷，攻击者可登录你能登录的所有机器。'
+    authority: ['CWE-522 凭据保护不足', 'CWE-200 敏感信息暴露']
+    is_script: false
+    exploit_sensitive: true
+    disposition: 必须删除
+
+  - id: PR002
+    name: 读取云服务 / 发包 / Git 凭据文件
+    languages: [any]
+    pattern: '[/\\~.](aws[/\\]credentials|azure[/\\]|config[/\\]gcloud|kube[/\\]config|docker[/\\]config\.json|npmrc|pypirc|netrc|git-credentials)\b|config[/\\]gh[/\\]hosts\.yml'
+    severity: 高
+    literal: '~/.aws/credentials、.npmrc、.git-credentials（各类账号凭据文件）'
+    plain: '程序读取存放各种账号密码的配置文件。'
+    consequence: '云账号、发包账号、Git 账号被盗。'
+    authority: ['CWE-522 凭据保护不足', 'CWE-200']
+    is_script: false
+    exploit_sensitive: true
+    disposition: 必须删除
+
+  - id: PR003
+    name: 读取浏览器登录数据 / Cookie 库
+    languages: [any]
+    pattern: '(?i)(Login Data|Cookies|Web Data|logins\.json|key4\.db|cookies\.sqlite|Local State)\b[^\n]*(Chrome|Chromium|Edge|Brave|Firefox|Mozilla|User Data)|(Chrome|Chromium|Edge|Brave|Firefox|Mozilla|User Data)[^\n]*(Login Data|Cookies|Web Data|logins\.json|key4\.db|cookies\.sqlite|Local State)\b'
+    severity: 严重
+    literal: 'Chrome/User Data/Default/Login Data（浏览器/用户数据/默认/登录数据）：浏览器保存的账号密码数据库'
+    plain: '这是浏览器里"记住密码"和登录状态的存放处。程序读它就是在偷你所有网站的账号。'
+    consequence: '所有网站登录态与保存的密码被盗。'
+    authority: ['CWE-522 凭据保护不足', 'CWE-200']
+    is_script: false
+    exploit_sensitive: true
+    disposition: 必须删除
+
+  - id: PR004
+    name: 键盘记录
+    languages: [any]
+    pattern: '\b(pynput\.keyboard|keyboard\.(on_press|record|hook)|pyHook|SetWindowsHookEx|GetAsyncKeyState|iohook|node-global-key-listener)\b'
+    severity: 严重
+    literal: 'keyboard.on_press（键盘.按下时）：监听每一次按键'
+    plain: '程序在记录你敲的每一个键，包括密码。'
+    consequence: '密码、聊天内容全部被记录。'
+    authority: ['CWE-359 私人信息暴露给未授权方']
+    is_script: false
+    exploit_sensitive: true
+    disposition: 必须删除
+
+  - id: PR005
+    name: 剪贴板读取
+    languages: [python, javascript, typescript, any]
+    pattern: '\b(pyperclip\.paste|clipboard\.(paste|read|readText)|navigator\.clipboard\.readText|Tk\(\)\.clipboard_get|pbpaste|xclip\s+-o|Get-Clipboard)\b'
+    severity: 中
+    literal: 'pyperclip.paste()（剪贴板.粘贴）：读取剪贴板当前内容'
+    plain: '读你复制过的东西。复制的往往是密码、验证码、钱包地址。'
+    consequence: '复制过的敏感内容被拿走。若配合外传即为窃取。'
+    authority: ['CWE-200 敏感信息暴露']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: PR006
+    name: 摄像头 / 麦克风 / 屏幕截取
+    languages: [any]
+    pattern: '\b(cv2\.VideoCapture|pyaudio\.PyAudio|sounddevice\.rec|ImageGrab\.grab|pyautogui\.screenshot|mss\(\)\.grab|getUserMedia|getDisplayMedia|desktopCapturer)\b'
+    severity: 高
+    literal: 'cv2.VideoCapture(0)（视频捕获（0 号摄像头））/ ImageGrab.grab()（图像抓取.抓取）：打开摄像头 / 截屏'
+    plain: '程序打开摄像头、麦克风或截你的屏幕。视频会议类软件正常；其他类型软件出现这个要问为什么。'
+    consequence: '被偷拍、偷录、屏幕被监视。'
+    authority: ['CWE-359 私人信息暴露']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: PR007
+    name: 整体导出环境变量并外传
+    languages: [python, javascript, typescript, shell]
+    pattern: '(json\.dumps\(\s*dict\(\s*os\.environ|JSON\.stringify\(\s*process\.env\s*\)|\benv\s*\|\s*(curl|nc|base64)|os\.environ\.copy\(\)[^\n]*(post|send|upload))'
+    severity: 严重
+    literal: 'JSON.stringify(process.env)（JSON.字符串化（进程.环境变量））：把全部环境变量打包'
+    plain: '环境变量里通常放着所有密钥。整包打出去，等于把所有钥匙一次寄走。'
+    consequence: '全部凭据外泄。'
+    authority: ['CWE-200 敏感信息暴露', 'CWE-532 日志中包含敏感信息']
+    is_script: false
+    exploit_sensitive: true
+    disposition: 必须删除
+
+  - id: PR008
+    name: 采集机器指纹 / 联系人 / 位置
+    languages: [any]
+    pattern: '\b(uuid\.getnode|getmac|platform\.node\(\)|socket\.gethostname\(\)[^\n]*(post|send|requests)|navigator\.geolocation|CNContactStore|ContactsContract|AddressBook|ABAddressBook|CoreLocation|getLastKnownLocation)\b'
+    severity: 中
+    literal: 'navigator.geolocation（导航器.地理位置）/ ContactsContract（联系人合约）：读取位置 / 通讯录 / 硬件标识'
+    plain: '程序读取你的位置、通讯录或用来唯一标识这台机器的硬件编号。'
+    consequence: '位置与社交关系被采集；硬件编号可跨应用追踪你。'
+    authority: ['CWE-359 私人信息暴露', 'GDPR 第 5 条 数据最小化', '中华人民共和国个人信息保护法 第 6 条 最小必要']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: PR010
+    name: Windows 凭据管理器 / DPAPI / 登录进程内存
+    languages: [any]
+    pattern: '(?i)(\bcmdkey\s+/list|\bvaultcmd\b|CryptUnprotectData|Windows\.Security\.Credentials|PasswordVault|\\config\\SAM\b|\bntds\.dit\b|\blsass(\.exe)?\b[^\n]*(dump|MiniDump|procdump)|\bsekurlsa\b|\bmimikatz\b|Get-StoredCredential|\\Microsoft\\Credentials\\|\\Microsoft\\Protect\\)'
+    severity: 严重
+    literal: 'CryptUnprotectData / cmdkey /list / lsass dump（解密受保护数据 / 列出保存的凭据 / 转储登录进程内存）：读取 Windows 保存的账号密码'
+    plain: 'Windows 把你保存过的密码（网站、远程桌面、Wi-Fi）加密存在"凭据管理器"里。这些调用就是在解开它们，或者直接从系统登录进程的内存里把密码抠出来。'
+    consequence: 'Windows 上保存的全部账号密码被盗；域环境下可横向渗透到其他机器。'
+    authority: ['MITRE ATT&CK T1555.004 Windows 凭据管理器', 'T1003.001 LSASS 内存', 'CWE-522']
+    is_script: false
+    exploit_sensitive: true
+    disposition: 必须删除
+
+  - id: PR009
+    name: 敏感数据写入日志
+    languages: [python, javascript, typescript]
+    pattern: '(?i)(log|logger|console)\.(info|debug|warn|error|log)\([^)]*(password|passwd|secret|token|api_key|authorization|cookie)'
+    severity: 中
+    literal: 'logger.info(password)（记录器.信息（密码））：把密码写进日志'
+    plain: '日志通常会被收集、备份、给别人看。密码写进去等于抄一份放在公共地方。'
+    consequence: '凭据通过日志泄露。'
+    authority: ['CWE-532 日志中包含敏感信息']
+    is_script: false
+    exploit_sensitive: false

@@ -1,0 +1,87 @@
+category_id: remote_exec
+category: 远程下载后执行
+description: 从网上下载一段东西，不检查就直接运行。这是供应链攻击和"一键安装脚本"最常见的入口。
+rules:
+  - id: RX001
+    name: curl/wget 管道到 shell
+    languages: [shell, dockerfile, yaml, python, javascript, typescript, any]
+    pattern: '\b(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b'
+    severity: 严重
+    literal: 'curl … | sh（下载 … 管道 壳）：把网上下载到的内容直接交给命令行解释器运行'
+    plain: '"从这个网址下载，下载到什么就跑什么"。你根本没看到它下载了什么；网址被劫持、域名过期被人接手，跑的就是别人的程序。'
+    consequence: '完全信任一个远程地址；地址背后内容一变，你的机器就被控制。'
+    authority: ['CWE-494 下载代码未做完整性校验', 'OWASP A08:2021 软件和数据完整性失效']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: RX002
+    name: 下载后 source / bash 执行
+    languages: [shell, dockerfile, yaml, any]
+    pattern: '(\bsource\s+<\(\s*(curl|wget)|\b(ba)?sh\s+<\(\s*(curl|wget)|\b(curl|wget)\b.*-[oO]\s*\S+.*&&\s*(ba)?sh\s)'
+    severity: 严重
+    literal: 'bash <(curl …)（壳 <(下载 …)）：把下载结果当脚本文件执行'
+    plain: '和上一条本质相同，只是写法不同。'
+    consequence: '远程代码执行。'
+    authority: ['CWE-494 下载代码未做完整性校验']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: RX003
+    name: Python 下载内容直接 exec
+    languages: [python]
+    pattern: '\b(exec|eval)\s*\(\s*(requests\.get|urlopen|urllib\.request\.urlopen|httpx\.get|aiohttp)[^)]*\)'
+    severity: 严重
+    literal: 'exec(requests.get(url).text)（执行（请求.获取（网址）.文本））：把网页内容当 Python 代码执行'
+    plain: '程序运行时去网上拉一段代码然后跑。这是典型的远程后门写法：作者随时可以改网上的内容来改变你机器上程序的行为。'
+    consequence: '远程控制、随时可变的恶意行为。'
+    authority: ['CWE-829 包含不可信控制域的功能', 'CWE-494']
+    is_script: true
+    exploit_sensitive: true
+
+  - id: RX004
+    name: pip 从 URL 或 git 直接安装
+    languages: [shell, dockerfile, yaml, txt, any]
+    pattern: '\bpip3?\s+install\b[^\n]*(https?://|git\+)'
+    severity: 高
+    literal: 'pip install https://…（pip 安装 网址）：不经官方仓库，直接从网址安装 Python 包'
+    plain: '绕过了 PyPI 官方仓库，安装的内容完全取决于那个网址。没有版本锁、没有校验。'
+    consequence: '供应链投毒：包内容被替换你察觉不到。'
+    authority: ['CWE-494 下载代码未做完整性校验', 'OWASP A08:2021']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: RX005
+    name: npx / npm 直接运行远程包
+    languages: [shell, yaml, json, any]
+    pattern: '\bnpx\s+(-y\s+|--yes\s+)?[a-z@][^\s]*(@latest|@\^|@~|@\*)?'
+    severity: 中
+    literal: 'npx 包名（npm 执行 包名）：下载并立即运行一个 npm 包'
+    plain: 'npx 会下载包然后直接执行它。若未锁定精确版本（尤其带 @latest），每次跑的可能都是不同代码。'
+    consequence: '包被投毒时立即中招。'
+    authority: ['CWE-494', 'OWASP A08:2021']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: RX006
+    name: 远程脚本注入到网页
+    languages: [javascript, typescript, html, any]
+    pattern: '(?i)<script[^>]+src\s*=\s*["'']https?://(?!(cdn\.jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com|ajax\.googleapis\.com))[^"'']+["'']'
+    severity: 中
+    literal: '<script src="https://某网址">（脚本 来源=网址）：从第三方网址加载并运行 JS'
+    plain: '网页会去加载那个网址的脚本并运行。那个网址的主人可以随时改脚本，读到你页面上的一切（包括用户输入）。'
+    consequence: '第三方脚本供应链风险、用户数据被采集。'
+    authority: ['CWE-829 包含不可信控制域的功能', 'OWASP A08:2021']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: RX007
+    name: PowerShell 下载执行
+    languages: [any]
+    pattern: '(?i)(Invoke-Expression|IEX)\s*\(?\s*(\(?New-Object\s+Net\.WebClient\)?\.DownloadString|Invoke-WebRequest|iwr)'
+    severity: 严重
+    literal: 'IEX (New-Object Net.WebClient).DownloadString(…)（执行表达式（下载字符串））：Windows 下下载并直接执行'
+    plain: 'Windows 版的 curl | sh。'
+    consequence: '远程代码执行。'
+    authority: ['CWE-494']
+    is_script: true
+    exploit_sensitive: false

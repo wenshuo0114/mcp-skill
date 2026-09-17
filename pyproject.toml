@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-skill"
+version = "0.1.0"
+description = "小插件跟工具流：只读代码文件审查器（MCP 服务器）+ 中文审查/教学技能"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=1.2",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+mcp-file-reviewer = "servers.file_reviewer.server:main"
+
+[tool.setuptools]
+packages = ["servers", "servers.file_reviewer"]
+
+[tool.setuptools.package-data]
+"servers.file_reviewer" = ["rules/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

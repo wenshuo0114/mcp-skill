@@ -1,0 +1,104 @@
+category_id: dependency
+category: 强依赖与非正常脚本插入
+description: 依赖没锁版本、依赖来自 git/URL、安装时自动跑脚本、引用了仓库之外的东西。这些让"你以为装的"和"实际装的"可以不一样。
+default_disposition: 必须修复
+rules:
+  - id: DP001
+    name: npm 安装钩子脚本
+    languages: [json]
+    pattern: '"(preinstall|install|postinstall|prepare|prepublish|preuninstall|postuninstall)"\s*:\s*"'
+    severity: 高
+    literal: '"postinstall": "…"（安装后: 命令）：npm install 时自动执行的命令'
+    plain: '只要有人装这个包，这条命令就自动跑，装的人根本不会看到。绝大多数供应链攻击就是从这里下手的。'
+    consequence: '安装即执行任意代码。'
+    authority: ['CWE-829 包含不可信控制域的功能', 'OWASP A08:2021 软件和数据完整性失效']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: DP002
+    name: 依赖来自 git / URL / 本地路径
+    languages: [json, txt, toml, yaml]
+    pattern: '(?i)("[^"]+"\s*:\s*"(git(\+\w+)?:|github:|https?://|file:|link:)|^\s*(-e\s+)?(git\+|https?://|file://|\.\./|/)[^\s#]+|@\s*(git\+|https?://))'
+    severity: 高
+    literal: '"包名": "git+https://…"（依赖 = 直接来自某个 Git 地址）'
+    plain: '依赖不是从官方仓库拿的，而是指向某个网址、Git 仓库或本机路径。那个地方的内容随时可以变，没有版本校验，换台机器也可能装不上。'
+    consequence: '供应链投毒、不可复现、指向性依赖（指向仓库之外）。'
+    authority: ['CWE-494 下载代码未做完整性校验', 'OWASP A08:2021']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: DP003
+    name: 版本号为通配 / latest
+    languages: [json, txt, toml, yaml]
+    pattern: '("[^"]+"\s*:\s*"(\*|latest|x|>=?\s*0(\.0)?(\.0)?)"|^\s*[A-Za-z0-9_.-]+\s*$|^\s*[A-Za-z0-9_.-]+\s*>=)'
+    severity: 中
+    literal: '"包名": "*" / "latest"（依赖 = 任意版本 / 最新）：不锁定版本'
+    plain: '没写具体版本，每次安装拿到的可能都不一样。上游发了坏版本，你就直接中招。'
+    consequence: '不可复现；上游被投毒时无防护。'
+    authority: ['CWE-1104 使用未维护的第三方组件', 'OWASP A06:2021 易受攻击和过时的组件']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 建议修复
+
+  - id: DP004
+    name: Python setup.py 中的自定义安装命令
+    languages: [python]
+    pattern: '\bcmdclass\s*=\s*\{|class\s+\w+\((install|develop|egg_info|build_py)\)\s*:'
+    severity: 高
+    literal: 'class 自定义(install):（类 自定义（安装））：重写 pip install 时的行为'
+    plain: 'pip install 这个包时会执行作者写的任意 Python 代码。这是 PyPI 上恶意包最常用的手法。'
+    consequence: '安装即执行任意代码。'
+    authority: ['CWE-829', 'OWASP A08:2021']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: DP005
+    name: 拼写相近的知名包名
+    languages: [json, txt, toml]
+    pattern: '(?i)\b(reqeusts|requets|requsts|urlib3?|beautifulsoup(?!4)|python-?dateutils|djanga|flsk|numpi|pandsa|colourama|crossenv|lodahs|expresss|reactt|momentjs|axois|jquerry)\b'
+    severity: 高
+    literal: '（和 requests / lodash / axios 等知名包差一两个字母的包名）'
+    plain: '包名故意和常用包写得很像，等你手滑装错。这类包几乎全是恶意的。'
+    consequence: '误装恶意包。'
+    authority: ['CWE-1357 依赖不可信组件', 'MITRE ATT&CK T1195 供应链攻击']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 必须删除
+
+  - id: DP006
+    name: 引用仓库外的绝对路径
+    languages: [python, javascript, typescript, shell, json, yaml, toml, md, txt]
+    pattern: '(?<![\w:])(/home/[A-Za-z0-9_.-]+/|/Users/[A-Za-z0-9_.-]+/|/root/|[A-Z]:\\\\Users\\\\[^\\\\\s]+\\\\|/opt/[A-Za-z0-9_.-]+/|/mnt/[A-Za-z0-9_.-]+/|/srv/)[^\s"''`)\]]*'
+    severity: 中
+    literal: '/home/某人/某路径（指向某台特定机器上的固定位置）'
+    plain: '代码写死了某台电脑上的路径。别人的机器上没有这个路径，跑不起来；也暴露了作者的用户名和目录结构。'
+    consequence: '指向性依赖：只在作者机器上能跑；泄露本机信息。'
+    authority: ['CWE-426 不可信搜索路径', 'CWE-200']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: DP007
+    name: 引用上级目录之外
+    languages: [python, javascript, typescript, shell, json, yaml, md]
+    pattern: '(["''`(\s=])(\.\./){2,}[^\s"''`)]*'
+    severity: 低
+    literal: '../../..（上级/上级/上级）：跳出当前项目去引用别处的文件'
+    plain: '连续往上跳好几层，很可能已经跳出了这个仓库，依赖的是作者电脑上仓库外面的东西。'
+    consequence: '指向性依赖；仓库不自包含。'
+    authority: ['CWE-22 路径遍历（相关）']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 建议修复
+
+  - id: DP008
+    name: Git 子模块 / 外部仓库引用
+    languages: [any]
+    pattern: '(\[submodule\s+"|\bgit\s+submodule\s+add\b|\bgit\s+clone\s+https?://|"repository"\s*:\s*"https?://)'
+    severity: 中
+    literal: '[submodule "…"] / git clone https://…（子模块 / 克隆 某网址）：把另一个仓库拉进来'
+    plain: '这个项目依赖另一个仓库的内容。那个仓库是谁的、会不会变、有没有被审查过，都需要单独核对。'
+    consequence: '引入未审查的外部仓库（需要按"发现其他仓库"流程处理）。'
+    authority: ['OWASP A08:2021']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 建议修复

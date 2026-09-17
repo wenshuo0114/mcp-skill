@@ -1,0 +1,92 @@
+category_id: network
+category: 网络外联与传输安全
+description: 硬编码外部地址、关闭证书校验、明文传输。决定了数据往哪去、路上会不会被看。
+default_disposition: 必须修复
+rules:
+  - id: NW001
+    name: 关闭 TLS 证书校验
+    languages: [python, javascript, typescript, shell, any]
+    pattern: '(verify\s*=\s*False|rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*["'']?0|curl\s+[^\n]*(-k\b|--insecure)|wget\s+[^\n]*--no-check-certificate|ssl\._create_unverified_context|CERT_NONE|InsecureSkipVerify\s*:\s*true|--trusted-host)'
+    severity: 高
+    literal: 'verify=False（校验=假）/ -k（不安全）：不检查对方的 HTTPS 证书'
+    plain: 'HTTPS 的锁头本来是用来确认"对面真的是那个网站"。关了校验，任何人都能冒充那个网站截你的数据。'
+    consequence: '中间人攻击：传输内容被窃听、篡改。'
+    authority: ['CWE-295 证书校验不当', 'OWASP A02:2021 加密机制失效']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: NW002
+    name: 硬编码公网 IP 地址
+    languages: [any]
+    pattern: '(?<![\d.])(?!(10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|255\.))(\d{1,3}\.){3}\d{1,3}(?![\d.])'
+    severity: 中
+    literal: '203.0.113.5（一个写死的公网 IP 地址）'
+    plain: '代码里写了一个具体的外网机器地址。数据会往那里发，或从那里拉东西。要问：这台机器是谁的？'
+    consequence: '数据流向不透明；地址易被接管。'
+    authority: ['CWE-547 使用硬编码的安全相关常量']
+    is_script: false
+    exploit_sensitive: false
+
+  - id: NW003
+    name: 明文 HTTP 传输
+    languages: [python, javascript, typescript, shell, json, yaml, md]
+    pattern: '(?<![\w/])http://(?!(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|schemas\.|www\.w3\.org|json-schema\.org|example\.com|xmlns))[A-Za-z0-9.-]+'
+    severity: 低
+    literal: 'http://…（不加密的网页协议）'
+    plain: '不带 s 的 http 传输是明文的，路上的任何设备都能看到、改掉内容。'
+    consequence: '内容被窃听或篡改（尤其是下载脚本、发送凭据时）。'
+    authority: ['CWE-319 明文传输敏感信息', 'OWASP A02:2021']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 建议修复
+
+  - id: NW004
+    name: 向外部地址 POST 数据
+    languages: [python, javascript, typescript, shell]
+    pattern: '(requests\.post\(\s*["'']https?://|fetch\(\s*["'']https?://[^"'']+["'']\s*,\s*\{[^}]*method\s*:\s*["'']POST|axios\.post\(\s*["'']https?://|curl\s+[^\n]*(-d\b|--data|-F\b|--form|-X\s*POST)[^\n]*https?://|urllib\.request\.Request\([^\n]*data\s*=)'
+    severity: 中
+    literal: 'requests.post("https://某地址", data=…)（请求.发送（网址，数据））：把数据发到外面'
+    plain: '程序在往一个外部地址发送数据。发的是什么、发给谁，需要逐个确认。配合前面的"读取隐私"规则一起看。'
+    consequence: '数据外传（若内容是隐私/凭据即为窃取）。'
+    authority: ['CWE-200 敏感信息暴露', 'CWE-201 通过传输泄露信息']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 建议修复
+
+  - id: NW005
+    name: 使用匿名 / 临时数据投递服务
+    languages: [any]
+    pattern: '(?i)\b(pastebin\.com|paste\.ee|transfer\.sh|file\.io|0x0\.st|ngrok\.io|ngrok-free\.app|requestbin|webhook\.site|pipedream\.net|burpcollaborator|interact\.sh|oastify\.com|dnslog|ceye\.io|serveo\.net|localtunnel|trycloudflare\.com|discord(app)?\.com/api/webhooks|api\.telegram\.org/bot)\b'
+    severity: 严重
+    literal: 'webhook.site / ngrok.io / api.telegram.org/bot（匿名接收数据的中转服务）'
+    plain: '这些地址是攻击者最常用的"收货地址"：匿名、免费、一次性。正常项目几乎不会往这些地方发数据。'
+    consequence: '数据外传到匿名接收端，几乎可以断定为窃取。'
+    authority: ['MITRE ATT&CK T1567 通过 Web 服务外传', 'CWE-200']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 必须删除
+
+  - id: NW006
+    name: 硬编码外部域名
+    languages: [python, javascript, typescript, shell]
+    pattern: '["'']https?://(?!(localhost|127\.0\.0\.1|0\.0\.0\.0|github\.com|githubusercontent\.com|api\.github\.com|pypi\.org|files\.pythonhosted\.org|registry\.npmjs\.org|npmjs\.com|nodejs\.org|python\.org|docs\.|developer\.|www\.w3\.org|schemas?\.|json-schema\.org|example\.(com|org)|cursor\.com|modelcontextprotocol\.io|openai\.com|anthropic\.com|googleapis\.com|microsoft\.com|apple\.com|mozilla\.org))[A-Za-z0-9.-]+\.[a-z]{2,}'
+    severity: 低
+    literal: '"https://某域名"（写死的外部网址）'
+    plain: '程序会和这个网址通信。列出来让你逐个确认：认识吗？为什么需要它？'
+    consequence: '数据流向需人工确认。'
+    authority: ['CWE-547']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 建议修复
+
+  - id: NW007
+    name: CORS 允许任意来源
+    languages: [python, javascript, typescript, yaml, json]
+    pattern: '(Access-Control-Allow-Origin["'']?\s*[:=,]\s*["'']\*|allow_origins\s*=\s*\[\s*["'']\*|origin\s*:\s*["'']\*["'']|cors\(\s*\)|CORS\([^)]*origins\s*=\s*["'']\*)'
+    severity: 中
+    literal: 'Access-Control-Allow-Origin: *（访问控制-允许-来源：任意）：允许任何网站调用你的接口'
+    plain: '任何网页都可以在用户浏览器里悄悄调用你的接口。若接口带登录态，别的网站就能替用户操作。'
+    consequence: '跨站数据读取 / 越权操作。'
+    authority: ['CWE-942 过于宽松的跨域白名单', 'OWASP A05:2021 安全配置错误']
+    is_script: false
+    exploit_sensitive: false
