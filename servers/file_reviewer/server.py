@@ -557,6 +557,71 @@ def review_references_of(symbol: str, limit: int = 200) -> dict[str, Any]:
 
 
 @_tool(read_only=True)
+def review_persistence_inventory(scan: bool = True, max_files_per_location: int = 300) -> dict[str, Any]:
+    """按当前操作系统列出已知“持久化位置”（定时任务、systemd/launchd 单元、启动文件夹、shell 启动脚本、
+    ld.so.preload、浏览器配置与策略、SSH authorized_keys、hosts 等）：哪些存在、当前用户能否读、里面有多少文件；
+    scan=True 时对能读的文件逐行扫描并写入报告。只读；不提权；读不到的如实报原因。
+    活的进程/服务/端口运行态不看——把官方查看命令原文给用户自己跑。附“凭据轮换根治法”（售出机器/读不到的 VPS 用）。"""
+    from . import persistence as ps
+    env_info = envmod.detect_environment()
+    locs = ps.persistence_locations()
+    reach = {r["路径"]: r for r in envmod.reachability([l["路径"] for l in locs])}
+    existing: list[dict] = []
+    findings: list[sc.Finding] = []
+    scanned_files = 0
+    for l in locs:
+        r = reach[l["路径"]]
+        if not r["存在"]:
+            continue
+        item = {**l, "可达": r["可达"], "不可达原因": r.get("原因"), "属主是当前用户": r.get("属主是当前用户"), "文件数": 0}
+        if r["可达"]:
+            p = Path(l["路径"])
+            files = [p] if p.is_file() else []
+            if p.is_dir():
+                try:
+                    files = list(sc.iter_source_files(p, strict=True))
+                except OSError:
+                    files = []
+            item["文件数"] = len(files)
+            item["文件(前20)"] = [str(f) for f in files[:20]]
+            if scan:
+                for f in files[:max_files_per_location]:
+                    try:
+                        findings.extend(sc.scan_file(f, _RULES, p if p.is_dir() else p.parent))
+                        scanned_files += 1
+                    except OSError:
+                        pass
+        existing.append(item)
+    out_findings: list[dict] = []
+    saved = None
+    try:
+        report = _report()
+    except RuntimeError:
+        report = Report("_持久化位置", "本机持久化位置")
+    report.set_environment(env_info)
+    nums = report.add_findings([f.to_dict() for f in findings])
+    for num, f in zip(nums, findings):
+        d = f.to_dict(); d["发现编号"] = num; out_findings.append(d)
+    report.data["持久化清单"] = {"记录时间": rc.now_iso(), "位置": existing, "扫描文件数": scanned_files,
+                            "发现数": len(findings), "官方查看命令": ps.official_live_state_commands(),
+                            "凭据轮换根治法": ps.CREDENTIAL_ROTATION_GUIDE}
+    saved = report.save()
+    missing = [l["路径"] for l in locs if not reach[l["路径"]]["存在"]]
+    return {
+        "环境来源": env_info["位置判断"],
+        "存在的持久化位置": existing,
+        "不存在的位置数": len(missing),
+        "扫描文件数": scanned_files,
+        "发现": out_findings,
+        "摘要": sc.summarize_findings(findings),
+        "诚实边界": "以上只是文件。正在运行的服务、进程、监听端口、计划任务的运行态，审查器不会去跑命令看。下面的官方命令请你自己跑，结果里不认识的名字告诉我。",
+        "官方查看命令(你自己跑)": ps.official_live_state_commands(),
+        "凭据轮换根治法(售出机器/读不到的VPS用)": ps.CREDENTIAL_ROTATION_GUIDE,
+        "报告": saved,
+    }
+
+
+@_tool(read_only=True)
 def review_explain_paths(paths: list[str] | None = None, limit: int = 50) -> dict[str, Any]:
     """给不熟悉路径的人解释“这个文件在什么地方”：git 仓库（哪个平台）/ 云仓库 / 部署到 Cloudflare 等的网页 /
     VPS 系统目录 / 你的用户目录 / 其他用户目录 / 本机虚拟机或容器 / 通过挂载触达的远程宿主；文件名中文含义；
