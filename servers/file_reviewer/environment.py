@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import platform
+import time
 from pathlib import Path
 
 # 各家虚拟机/云在 DMI 里的惯用字样（只用于"看起来像"，不用于"确认是"）
@@ -314,4 +315,77 @@ def authenticity_questions(env_info: dict, roots: list[str]) -> dict:
         "我查不出的": env_info["查不出的"],
         "确认词": AUTHENTICITY_CONFIRM,
         "不确认的后果": "不扫整盘。你仍可用 review_scope 的 文件 / 文件夹 / 整仓 三种范围。",
+    }
+
+
+# ---------------- 挑战-应答：证"控制权"，不证"所有权" ----------------
+#
+# 口头说"是我的"不能当真。软件能核的只有一件事：你此刻能不能以管理员身份在这台机器上做一件只有管理员能做的事。
+# 做法：工具发一个一次性随机码，请用户以管理员身份把它写进一个只有管理员能写的位置；工具只读那个文件核对。
+# 这证明"你控制着这台机器的管理员账号"，不证明"这台机器法律上是你的"——后者任何代码都查不出来。
+
+CHALLENGE_TTL_SECONDS = 15 * 60
+_CHALLENGE_NAME = "mcp-skill-challenge"
+
+
+def challenge_path() -> Path:
+    if os.name == "nt":
+        return Path(os.environ.get("SystemRoot", r"C:\Windows")) / f"{_CHALLENGE_NAME}.txt"
+    return Path("/etc") / _CHALLENGE_NAME
+
+
+def new_challenge() -> dict:
+    import secrets
+    code = secrets.token_hex(4)  # 8 个十六进制字符，够一次性用
+    p = challenge_path()
+    if os.name == "nt":
+        cmd = f"Set-Content -Path '{p}' -Value '{code}' -Encoding ascii   （在“以管理员身份运行”的 PowerShell 里执行）"
+        cleanup = f"Remove-Item '{p}'"
+    else:
+        cmd = f"sudo sh -c 'echo {code} > {p}'   （会要你输一次本机密码；输在你自己的终端里，不是给我）"
+        cleanup = f"sudo rm {p}"
+    return {
+        "挑战码": code,
+        "签发时间": time.time(),
+        "有效期(秒)": CHALLENGE_TTL_SECONDS,
+        "请你在这台机器上以管理员身份执行": cmd,
+        "核对后请删除": cleanup,
+        "这能证明什么": "证明你此刻能以管理员身份在这台机器上写系统目录 = 你控制着它的管理员账号。",
+        "这不能证明什么": "不能证明这台机器法律上是你的。任何软件都查不出所有权；我不会在报告里写“已核实所有者”。",
+        "防的是什么": "有人在别人电脑上开个普通账号就让工具扫整盘。防不了拿到管理员密码的人。",
+        "我不会做的": "我不代跑这条命令，不提权，不写那个文件；只读它核对。核对完文件由你自己删。",
+    }
+
+
+def _owner_is_root(st: os.stat_result) -> bool:
+    return st.st_uid == 0
+
+
+def verify_challenge(issued: dict | None) -> dict:
+    """只读核对挑战文件。issued 是 new_challenge() 的返回（存在状态里）。"""
+    if not issued:
+        return {"通过": False, "原因": "没有已签发的挑战码，先调用一次不带 challenge_ok 的整盘请求拿码。"}
+    age = time.time() - float(issued.get("签发时间", 0))
+    if age > CHALLENGE_TTL_SECONDS:
+        return {"通过": False, "原因": f"挑战码已过期（{int(age)} 秒 > {CHALLENGE_TTL_SECONDS}），请重新拿码。"}
+    p = challenge_path()
+    if not p.exists():
+        return {"通过": False, "原因": f"没找到 {p}。要么命令还没跑，要么不是管理员（写不进去）。我不提权、不帮写。"}
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace").strip()
+        st = p.stat()
+    except OSError as e:
+        return {"通过": False, "原因": f"读不到 {p}：{e.__class__.__name__}。"}
+    checks = {"内容与挑战码一致": content == issued["挑战码"],
+              "文件是刚写的": (time.time() - st.st_mtime) <= CHALLENGE_TTL_SECONDS}
+    if os.name != "nt":
+        checks["文件属主是 root"] = _owner_is_root(st)
+    ok = all(checks.values())
+    return {
+        "通过": ok,
+        "核对项": checks,
+        "文件": str(p),
+        "结论": ("通过：你此刻控制着这台机器的管理员账号。这不是所有权证明，报告里也不会这么写。" if ok else
+               "未通过：见核对项。不通过就不扫整盘；不提供任何绕过方法。"),
+        "请删除": issued.get("核对后请删除"),
     }

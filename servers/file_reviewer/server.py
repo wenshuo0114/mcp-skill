@@ -37,6 +37,7 @@ from . import rollback as rb
 from . import environment as envmod
 from . import path_kind as pk
 from . import neutralize as nz
+from . import confirm as cf
 from .report import Report, REPORT_DIR
 
 INSTRUCTIONS = """文件审查器（只读）。使用顺序：review_open → review_scan（分批）→ 逐条按固定格式向用户解释并提问 → report_write_decision → 需要修改时先 rollback_create 再改 → report_write_fix。
@@ -305,8 +306,6 @@ def review_user_level_configs(extra_paths: list[str] | None = None, offset: int 
     }
 
 
-_DISK_CONFIRM = "✅ 授权只读扫描整盘"
-_DISK_CONFIRM_OTHERS = "✅ 授权只读扫描整盘，含其他用户目录"
 
 
 @_tool(read_only=True)
@@ -315,11 +314,13 @@ def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = 
     """选定审查范围，四选一由用户决定：mode = "文件" | "文件夹" | "整仓" | "整盘"。
     - 文件 / 文件夹：path 指向任意位置，不限于当前仓库、不限于白名单。
     - 整仓：path 所在 git 仓库的根，等同 review_open(strict=True) 并缓存文件清单。
-    - 整盘：Linux/macOS 从 / 起、Windows 所有盘符；需要 confirm="✅ 授权只读扫描整盘"，
-      且需要用户先核对真实性（这台机器是你的？你是管理员？你知道自己在虚拟机/容器里？扫描根可达？）并回复
-      owner_confirm="✅ 这台机器是我的，我有权限，继续"。审查器只报它看到的信号，绝不宣称“已核实”。
-      默认跳过其他用户的家目录（别人的目录是别人的隐私）；include_other_users=True 需要
-      confirm="✅ 授权只读扫描整盘，含其他用户目录"，且只应在这台机器完全属于你、或你对它有管理职责时使用。
+    - 整盘：Linux/macOS 从 / 起、Windows 所有盘符。三道门，每道都把用户的原话传进来（回编号 / 关键字 / 原话都能命中，
+      含否定词一律按停止；同时对上多个选项时工具会缩小范围再问）：
+      1) owner_confirm：真实性反问后用户的选择（选项 1「这台机器是我的，我有权限，继续」）；
+      2) 管理员挑战：工具发一次性随机码，用户自己以管理员身份把它写进系统目录（/etc 或 C:/Windows），工具只读核对——
+         证明的是“控制权”，不是“所有权”，报告里不会写“已核实所有者”；
+      3) confirm：整盘授权，选项 1 不含其他用户目录（默认）、选项 2 含（只在机器完全属于你或你有管理职责时）。
+      审查器只报它看到的信号，绝不宣称“已核实”。
       只跳伪文件系统（/proc /sys /dev /run）；不跟随符号链接；设备、管道、套接字不读。
     strict 默认 True：不跳过任何目录。max_files=0 不设上限。
     文件清单写在状态目录（不写进被审位置），之后 review_scan / review_secrets_inventory / review_references_of 都在此范围内进行。"""
@@ -329,26 +330,58 @@ def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = 
     notes: list[str] = []
     env_info = envmod.detect_environment()
     if mode == "整盘":
-        expected = _DISK_CONFIRM_OTHERS if include_other_users else _DISK_CONFIRM
-        if owner_confirm.strip() != envmod.AUTHENTICITY_CONFIRM:
+        state0 = rc.load_state()
+        # 第一道：真实性反问 —— 用户回编号/关键字/原话都行；含否定词一律按“停”
+        owner_opts = cf.owner_options()
+        om = cf.match(owner_confirm, owner_opts)
+        if not om.命中 or om.命中.值 is not True:
+            if om.命中 and om.命中.值 is False:
+                return {"已停止": True, "说明": f"{om.说明} 不扫整盘。你仍可用 文件 / 文件夹 / 整仓 三种范围，只扫你自己的目录。"}
             return {
                 "需要核对真实性": True,
                 "说明": "整盘之前，先请你核对下面几件事。我不替你判断这台机器是谁的、你有没有权限——我只能报我看到的信号，"
                       "而且来宾里的程序无法证明宿主是真的（这一项我无能为力，只能给你官方命令自己跑）。",
                 **envmod.authenticity_questions(env_info, [str(r) for r in rc.disk_roots()]),
-                "如何继续": f"核对无误后，同时传 owner_confirm=\"{envmod.AUTHENTICITY_CONFIRM}\" 和 confirm=\"{expected}\"。",
+                "请选": cf.ask(owner_opts, om if owner_confirm else None, "核对完了，请选一个（回编号或关键字都可以）"),
+                "如何继续": "把你的选择放在 owner_confirm 里再调用。之后还有两步：管理员挑战码核对、整盘授权。",
             }
-        if confirm.strip() != expected:
+        # 第二道：挑战-应答 —— 口头说“是我的”不算，用管理员身份把随机码写进系统目录，我只读核对
+        issued = state0.get("整盘挑战")
+        if not issued:
+            issued = envmod.new_challenge()
+            state0["整盘挑战"] = issued
+            rc.save_state(state0)
+            return {"需要管理员挑战": True,
+                    "说明": "光说“是我的”不能当真——任何软件都查不出所有权。我能核的只有“你此刻能不能以管理员身份在这台机器上做一件只有管理员能做的事”。"
+                          "请你自己跑下面这条命令（我不代跑、不提权），跑完再用同样参数调用一次，我只读那个文件核对。",
+                    **{k: v for k, v in issued.items() if k != "签发时间"},
+                    "如何继续": "命令跑完后，再调用一次 review_scope(整盘, owner_confirm=同上, confirm=同上)。"}
+        vc = envmod.verify_challenge(issued)
+        if not vc["通过"]:
+            if "过期" in vc.get("原因", ""):
+                state0.pop("整盘挑战", None); rc.save_state(state0)
+            return {"需要管理员挑战": True, "核对结果": vc,
+                    "挑战码": issued["挑战码"], "请你在这台机器上以管理员身份执行": issued["请你在这台机器上以管理员身份执行"],
+                    "如何继续": "按“原因”修正后再调用一次；过期就重新调用拿新码。不通过就不扫整盘，我不提供绕过方法。"}
+        # 第三道：整盘授权（含/不含其他用户目录由你选的选项决定，也可用 include_other_users 参数）
+        disk_opts = cf.disk_options()
+        dm = cf.match(confirm, disk_opts)
+        if not dm.命中 or dm.命中.值 is None:
+            if dm.命中 and dm.命中.值 is None:
+                return {"已停止": True, "说明": f"{dm.说明} 不扫整盘。", "请删除挑战文件": issued.get("核对后请删除")}
             return {
                 "需要授权": True,
+                "管理员挑战": "已通过（证明的是控制权，不是所有权）",
                 "说明": "整盘扫描会读取这台机器上你有权限读的所有普通文件（只读、不执行、不联网、不外传；密钥值一律隐去）。"
-                      "耗时可能很长；报告里会出现大量路径。默认跳过其他用户的家目录。",
-                "如何授权": f"请原话回复：{expected}",
-                "其他用户目录": ("将包含" if include_other_users else "默认跳过")
-                          + f"：{[str(x) for x in rc.other_user_homes()]}"
-                          + ("" if include_other_users else f"。如需包含，改用 include_other_users=True 并回复：{_DISK_CONFIRM_OTHERS}。"
-                             "只有这台机器完全属于你、或你对它有管理职责时才这样做——别人的目录是别人的隐私。"),
+                      "耗时可能很长；报告里会出现大量路径。",
+                "其他用户目录": f"这台机器上还有：{[str(x) for x in rc.other_user_homes()]}。默认跳过——别人的目录是别人的隐私；"
+                          "选 2 才包含，且只在这台机器完全属于你、或你对它有管理职责时。",
+                "请选": cf.ask(disk_opts, dm if confirm else None, "请选一个（回编号或关键字都可以）"),
+                "如何继续": "把你的选择放在 confirm 里再调用。",
             }
+        include_other_users = bool(dm.命中.值)  # 用户选的选项说了算，参数只是提示
+        notes.append(f"管理员挑战通过（文件 {vc['文件']}，证明的是控制权不是所有权）。核对完请删除：{issued.get('核对后请删除')}")
+        state0.pop("整盘挑战", None); rc.save_state(state0)
         roots = rc.disk_roots()
         name = f"整盘-{os.uname().nodename if hasattr(os, 'uname') else os.environ.get('COMPUTERNAME', 'host')}"
         root_str = str(roots[0])
@@ -498,15 +531,20 @@ def review_read(file: str, start: int = 1, end: int = 200, confirm: str = "") ->
     if sc.is_probably_binary(p):
         return {"untrusted_content": True, "file": str(p), "note": "二进制文件，不展示内容。", "lines": []}
     is_cred = _is_credential_file(p)
-    if is_cred and confirm.strip() != _credential_confirm_phrase(p):
-        return {
-            "需要授权": True,
-            "file": str(p),
-            "说明": f"{p.name} 是密钥/凭据类文件。按硬规矩，读取前必须先告知你并得到你的中文确认。"
-                  "读取后我也只会回显变量名和结构，不回显值；值不会写进报告、状态或缓存。",
-            "如何授权": f"请原话回复：{_credential_confirm_phrase(p)}",
-            "不授权的后果": "该文件只出现在凭据清单里（路径、变量名、git 跟踪状态），不读取内容；这不影响对其余文件的审查。",
-        }
+    if is_cred:
+        opts = cf.credential_options(p.name)
+        m = cf.match(confirm, opts)
+        if m.命中 and m.命中.值 is False:
+            return {"已停止": True, "file": str(p), "说明": f"{m.说明} 不读取内容；该文件只出现在凭据清单里。"}
+        if not m.命中:
+            return {
+                "需要授权": True,
+                "file": str(p),
+                "说明": f"{p.name} 是密钥/凭据类文件。按硬规矩，读取前必须先告知你并得到你的中文确认。"
+                      "读取后我也只会回显变量名和结构，不回显值；值不会写进报告、状态或缓存。",
+                "请选": cf.ask(opts, m if confirm else None, "请选一个（回编号或关键字都可以）"),
+                "不授权的后果": "该文件只出现在凭据清单里（路径、变量名、git 跟踪状态），不读取内容；这不影响对其余文件的审查。",
+            }
     lines = sc.read_lines(p)
     start = max(1, start)
     end = min(len(lines), max(start, end))
@@ -670,25 +708,39 @@ def _finding_or_raise(finding_id: int) -> dict:
 
 
 @_tool(read_only=True)
-def review_plan_neutralization(finding_id: int) -> dict[str, Any]:
+def review_plan_neutralization(finding_id: int, reply: str = "") -> dict[str, Any]:
     """为某条发现算出“无害化（钉）”后的样子——只产出提案与差异预览，不写盘。
     钉 = 就地清除可利用原文、写空值、加只读中文注释「已无害化，风险：X，不提供复现」；不是回滚点、不留可恢复副本。
-    返回：原行（高风险不回显、密钥打码）、无害化后文本、diff、是否需要重写（改动大要先告知并另开会话/子代理出方案）、
-    能否修复、隐藏字符检查、逐文件确认词。写入必须由用户以确认词授权后由助手手工完成，然后调用 review_verify_neutralized。"""
+    整个文件就是载荷（实质行几乎全命中、或 .pth/.service/钩子这类只为被自动执行的文件）时，提案改为删除整个文件——不留空壳、不留副本。
+    返回：原行（严重级/必须删除/密钥不回显）、无害化后、diff、能否修复、重写要点（必须修复的给方向不给代码）、是否需要重写、
+    隐藏字符检查、「请选」三选项。用户回答后把原话放进 reply 再调一次，由工具判定选了哪个（编号/关键字/原话，含否定词按不动）。
+    写入/删除必须由用户选 1 后由助手手工完成，然后调用 review_verify_neutralized。"""
     f = _finding_or_raise(finding_id)
     rule = _RULE_BY_ID.get(f["规则ID"])
     if not rule:
         raise ValueError(f"规则 {f['规则ID']} 不在当前规则库里")
     path = _inside_current_repo(Path(f["文件详细路径"]))
     report = _report()
-    in_file = sum(1 for x in report.data["发现"] if x["文件详细路径"] == f["文件详细路径"])
-    proposal = nz.propose(path, int(f["行号"]), rule, findings_in_file=in_file)
+    same_file = [x for x in report.data["发现"] if x["文件详细路径"] == f["文件详细路径"]]
+    hit_lines = {int(x["行号"]) for x in same_file}
+    proposal = nz.propose(path, int(f["行号"]), rule, findings_in_file=len(same_file), hit_lines=hit_lines)
     proposal["发现编号"] = finding_id
+    whole = bool(proposal.get("整文件处置"))
+    if reply:
+        m = cf.match(reply, cf.neutralize_options(path.name, None if whole else int(f["行号"]), whole))
+        proposal["用户选择"] = m.to_dict()
+        if m.命中:
+            proposal["用户选择"]["动作"] = {"do": "执行：按“无害化后”只改这一处（整文件处置则删除文件），然后 review_verify_neutralized。",
+                                      "record_only": "不动。把“不动的后果”写进报告（report_write_decision），不再追问。",
+                                      "rewrite_plan": "先不动。在单独会话/子代理里按“重写要点”产出方案，用户看完再决定。"}[m.命中.值]
+        else:
+            proposal["用户选择"]["请再选"] = cf.ask(cf.neutralize_options(path.name, None if whole else int(f["行号"]), whole), m, "")
     proposal["下一步"] = (
-        "1. 把“原行（按回显策略）/ 无害化后 / 风险 / 能否修复 / 是否需要重写”念给用户；"
-        "2. 用户原话回复确认词后，助手用编辑工具只改这一处；"
-        "3. 立即 review_verify_neutralized(finding_id, expected_sha=sha256_无害化后(预期))；"
-        "4. review_references_of 查引用；5. report_write_fix(..., rollback_point=\"无害化：不留备份\")。"
+        "1. 把“原行（按回显策略）/ 无害化后 / 风险 / 能否修复 / 是否需要重写 / 重写要点”念给用户，并列出「请选」；"
+        "2. 用户回答后，把原话放进 reply 再调一次本工具，由工具判定选了哪个（回编号/关键字/原话都行，含否定词按不动）；"
+        "3. 选 1 才动手：助手用编辑工具只改这一处（整文件处置则删除文件，不留任何副本）；"
+        "4. 立即 review_verify_neutralized(finding_id, expected_sha=sha256_无害化后(预期))；"
+        "5. review_references_of 查引用逐个处置；6. report_write_fix(..., rollback_point=\"无害化：不留备份\", finding_id=...)。"
     )
     return proposal
 
@@ -888,10 +940,12 @@ def rollback_list() -> dict[str, Any]:
 
 @_tool(read_only=False, destructive=True, idempotent=False)
 def rollback_restore(name: str, confirm: str = "") -> dict[str, Any]:
-    """点名恢复某个回滚点（会覆盖仓库内对应文件）。必须传 confirm="用户已授权恢复 <回滚点名>"，否则拒绝。"""
-    expected = f"用户已授权恢复 {name}"
-    if confirm != expected:
-        raise PermissionError(f"未获授权。请先向用户说明将覆盖哪些文件，得到明确同意后，以 confirm=\"{expected}\" 再调用。")
+    """点名恢复某个回滚点（会覆盖仓库内对应文件）。confirm 传用户的原话：选项 1「用户已授权恢复 <回滚点名>」（回编号/关键字/原话都行），
+    含否定词一律按不恢复；否则拒绝。"""
+    m = cf.match(confirm, cf.restore_options(name))
+    if not m.命中 or m.命中.值 is not True:
+        raise PermissionError(f"未获授权。请先向用户说明将覆盖哪些文件，得到用户选择后再调用。"
+                              f"{m.说明} 选项：{cf.render(cf.restore_options(name))['选项']}")
     cur = _current_repo()
     result = rb.restore_rollback_point(cur["仓库名"], name)
     report = _report()

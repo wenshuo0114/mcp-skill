@@ -52,11 +52,15 @@ def test_credential_file_read_requires_chinese_confirm_and_never_shows_values(is
 
     denied = s.review_read(str(risky_repo / ".env"))
     assert denied["需要授权"] is True
-    assert "✅ 授权只读密钥文件 .env" in denied["如何授权"]
+    assert denied["请选"]["选项"][0]["原话"] == "✅ 授权只读密钥文件 .env"
     assert "p4ssw0rd" not in str(denied)
 
-    wrong = s.review_read(str(risky_repo / ".env"), confirm="ok")
+    wrong = s.review_read(str(risky_repo / ".env"), confirm="嗯")
     assert wrong["需要授权"] is True
+    stop = s.review_read(str(risky_repo / ".env"), confirm="先别读")
+    assert stop["已停止"] is True and "p4ssw0rd" not in str(stop)
+    fuzzy = s.review_read(str(risky_repo / ".env"), confirm="1 读吧")
+    assert fuzzy["已授权只读"] is True and "p4ssw0rd" not in str(fuzzy)
 
     ok = s.review_read(str(risky_repo / ".env"), confirm="✅ 授权只读密钥文件 .env")
     assert ok["untrusted_content"] is True and ok["已授权只读"] is True
@@ -148,22 +152,48 @@ def test_scope_whole_disk_requires_confirm_and_skips_other_users(isolated_dirs, 
     monkeypatch.setattr(s.rc, "other_user_homes", lambda: [other])
     monkeypatch.setattr(s.rc, "_PSEUDO_FS", (str(fake_disk / "proc"),))
 
-    # 第一道：真实性反问（先问用户核对，而不是先甩环境）
+    # 第一道：真实性反问（先问用户核对，而不是先甩环境）；回答按编号/关键字/原话模糊命中
     ask = s.review_scope("整盘")
     assert ask["需要核对真实性"] is True
     assert any("这台机器是你的吗" in q for q in ask["请你核对"])
-    assert ask["确认词"] == "✅ 这台机器是我的，我有权限，继续"
     assert any("宿主真实性" in x for x in ask["我查不出的"]), "必须如实说宿主真实性无法自证"
     assert ask["扫描根可达性"][0]["路径"] == str(fake_disk)
-    OWNER = "✅ 这台机器是我的，我有权限，继续"
+    assert ask["请选"]["选项"][0]["编号"] == 1 and "回编号" in ask["请选"]["怎么回"]
+    # 含否定词 → 停，不进下一道
+    stop = s.review_scope("整盘", owner_confirm="这台是公司的")
+    assert stop["已停止"] is True
+    # 打错字/打不全也能命中（用户真实输入）
+    OWNER = "这台机器是我的，我有权限，给予"
 
-    # 第二道：整盘授权词
+    # 第二道：管理员挑战 —— 口头说是我的不算，要以管理员身份把随机码写进系统目录
+    chal_file = tmp_path / "etc-challenge"
+    monkeypatch.setattr(s.envmod, "challenge_path", lambda: chal_file)
+    monkeypatch.setattr(s.envmod, "_owner_is_root", lambda st: True)
+    need = s.review_scope("整盘", owner_confirm=OWNER)
+    assert need["需要管理员挑战"] is True and len(need["挑战码"]) == 8
+    assert "sudo" in need["请你在这台机器上以管理员身份执行"] and need["挑战码"] in need["请你在这台机器上以管理员身份执行"]
+    assert "不能证明这台机器法律上是你的" in need["这不能证明什么"]
+    # 没跑命令 → 不通过，不提供绕过
+    again = s.review_scope("整盘", owner_confirm=OWNER)
+    assert again["需要管理员挑战"] is True and again["核对结果"]["通过"] is False and "不提权" in again["核对结果"]["原因"]
+    # 写错码 → 不通过
+    chal_file.write_text("deadbeef\n", encoding="utf-8")
+    bad = s.review_scope("整盘", owner_confirm=OWNER)
+    assert bad["核对结果"]["核对项"]["内容与挑战码一致"] is False
+    # 用户自己（模拟）以管理员身份写入正确码
+    chal_file.write_text(need["挑战码"] + "\n", encoding="utf-8")
+
+    # 第三道：整盘授权 —— 同时对上“含/不含其他用户”两项时缩小再问
     denied = s.review_scope("整盘", owner_confirm=OWNER)
-    assert denied["需要授权"] is True and "✅ 授权只读扫描整盘" in denied["如何授权"]
+    assert denied["需要授权"] is True and "控制权" in denied["管理员挑战"]
     assert str(other) in denied["其他用户目录"]
+    amb = s.review_scope("整盘", owner_confirm=OWNER, confirm="授权扫整盘")
+    assert amb["需要授权"] is True and [o["编号"] for o in amb["请选"]["选项"]] == [1, 2], "对上两个就缩小再问，不猜"
+    assert "缩小" in amb["请选"]["标题"]
 
-    r = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘", owner_confirm=OWNER)
+    r = s.review_scope("整盘", confirm="1", owner_confirm=OWNER)
     assert "位置判断" in r["环境来源"] and "查不出的" in r["环境来源"]
+    assert any("控制权不是所有权" in n for n in r["说明"])
     text = Path(r["报告"]["报告路径"]).read_text(encoding="utf-8")
     assert "## 环境来源（只是信号，不是核实结论）" in text and "systemd-detect-virt" in text
     assert "已核实" not in text.replace("不是核实结论", "")
@@ -175,10 +205,15 @@ def test_scope_whole_disk_requires_confirm_and_skips_other_users(isolated_dirs, 
     assert r["范围"]["跳过的伪文件系统"] == [str(fake_disk / "proc")]
     assert Path(r["报告"]["报告路径"]).name.startswith("整盘-")
 
-    # 含其他用户目录：确认词不同，且要明说
-    wrong = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘", include_other_users=True, owner_confirm=OWNER)
-    assert wrong["需要授权"] is True
-    r2 = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘，含其他用户目录", include_other_users=True, owner_confirm=OWNER)
+    # 挑战码一次性：扫完即作废，再来要重新拿
+    need2 = s.review_scope("整盘", owner_confirm=OWNER)
+    assert need2["需要管理员挑战"] is True and need2["挑战码"] != need["挑战码"]
+    chal_file.write_text(need2["挑战码"], encoding="utf-8")
+    # 含其他用户目录：用户选的选项说了算（参数只是提示）；选 1 即便参数说含也不含
+    r1 = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘", include_other_users=True, owner_confirm=OWNER)
+    assert str(other / "secret.py") not in Path(r1["范围"]["文件清单文件"]).read_text().splitlines()
+    need3 = s.review_scope("整盘", owner_confirm=OWNER); chal_file.write_text(need3["挑战码"], encoding="utf-8")
+    r2 = s.review_scope("整盘", confirm="扫整盘，含其他用户", owner_confirm=OWNER)
     listed2 = Path(r2["范围"]["文件清单文件"]).read_text().splitlines()
     assert str(other / "secret.py") in listed2 and any("管理职责" in n for n in r2["说明"])
     # 清单在状态目录，不在被审位置

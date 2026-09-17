@@ -103,3 +103,48 @@ def test_server_flow_plan_verify_and_no_backup_for_malicious(isolated_dirs, risk
     assert "evil.example.net/x.sh" not in fix_section and "不保存原文" in fix_section
     with pytest.raises(Exception):
         s.report_write_fix(str(f), "a", "b", "x", "y", "高", True, True, "z", "立即", [], "无害化：不留备份")
+
+
+def test_whole_file_payload_proposes_deletion_not_shell(risky_repo: Path):
+    """整个文件就是载荷（.pth 自动执行）→ 提案删整文件，不留空壳；verify 以文件不存在为准。"""
+    pth = next(risky_repo.rglob("*.pth"))
+    rule = _rule("DP009")
+    hits = {i for i, l in enumerate(pth.read_text(encoding="utf-8").splitlines(), 1) if l.strip()}
+    p = nz.propose(pth, min(hits), rule, findings_in_file=len(hits), hit_lines=hits)
+    assert p["整文件处置"] is True and p["无害化后"] == "（删除整个文件）"
+    assert "空壳就是残留" in p["为什么删整个文件"]
+    assert p["原行"].startswith("[高风险不展示用法")
+    assert p["sha256_无害化后(预期)"] == "已删除"
+    assert "整个文件" in p["确认词"] and "不留空壳" in p["请选"]["选项"][0]["说明"]
+    assert pth.exists(), "提案不删文件"
+    # 文件还在 → 不通过
+    assert nz.verify(pth, rule, min(hits), "已删除", risky_repo)["通过"] is False
+    pth.unlink()
+    v = nz.verify(pth, rule, min(hits), "已删除", risky_repo)
+    assert v["通过"] is True and v["文件已不存在"] is True
+
+
+def test_rewrite_points_for_must_fix(risky_repo: Path):
+    f = risky_repo / "src" / "app.py"
+    lines = f.read_text(encoding="utf-8").splitlines()
+    ln = next(i for i, l in enumerate(lines, 1) if "curl https://evil" in l)
+    p = nz.propose(f, ln, _rule("RX001"), findings_in_file=1)
+    assert p["整文件处置"] is not True if "整文件处置" in p else True
+    rp = p["重写要点"]
+    assert rp and "锁定版本" in rp["改成"] and rp["去掉"] == "curl/wget 管道到 shell"
+    assert "不给可复现代码" in rp["说明"]
+
+
+def test_server_reply_is_judged_by_tool(isolated_dirs, risky_repo: Path):
+    s = isolated_dirs["server"]
+    s.review_open(str(risky_repo)); scan = s.review_scan()
+    fid = next(f["发现编号"] for f in scan["发现"] if f["规则ID"] == "RX001" and f["文件名"] == "app.py")
+    plan = s.review_plan_neutralization(fid)
+    assert plan["请选"]["选项"][0]["编号"] == 1 and "reply" in plan["下一步"]
+    r1 = s.review_plan_neutralization(fid, reply="钉吧")
+    assert r1["用户选择"]["命中"] == 1 and r1["用户选择"]["动作"].startswith("执行")
+    r2 = s.review_plan_neutralization(fid, reply="先不动")
+    assert r2["用户选择"]["命中"] == 2 and "不动" in r2["用户选择"]["动作"]
+    r3 = s.review_plan_neutralization(fid, reply="嗯")
+    assert r3["用户选择"]["命中"] is None and r3["用户选择"]["请再选"]["选项"]
+    assert Path(plan["文件"]).read_text(encoding="utf-8") == (risky_repo / "src" / "app.py").read_text(encoding="utf-8"), "工具从不写盘"
