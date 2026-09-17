@@ -135,3 +135,56 @@ rules:
     authority: ['MITRE ATT&CK T1070 清除痕迹']
     is_script: true
     exploit_sensitive: false
+
+  - id: IN012
+    name: 预加载库注入（LD_PRELOAD / ld.so.preload / DYLD_INSERT_LIBRARIES）
+    languages: [any]
+    pattern: '(\bLD_PRELOAD\s*=|export\s+LD_PRELOAD\b|/etc/ld\.so\.preload\b|\bDYLD_INSERT_LIBRARIES\s*=|\bLD_AUDIT\s*=|^\s*/[^\s]+\.so(\.\d+)*\s*$)'
+    severity: 严重
+    literal: 'LD_PRELOAD=/路径/x.so（链接器 预加载 = 某个共享库）：让系统在启动每个程序之前先加载这个库'
+    plain: '这是 Linux/macOS 上最隐蔽的一种注入：写进 /etc/ld.so.preload 或环境变量后，之后启动的每一个程序都会先跑这个库里的代码，程序自己完全不知道。杀软和 ls、ps 都可能被它改掉输出。'
+    consequence: '全系统范围的代码注入与持久化；可以对用户隐藏进程、文件、网络连接。'
+    authority: ['MITRE ATT&CK T1574.006 劫持执行流：动态链接器', 'CWE-426 不可信的搜索路径']
+    is_script: true
+    exploit_sensitive: true
+    disposition: 必须删除
+
+  - id: IN013
+    name: 浏览器策略 / 扩展 固化
+    languages: [any]
+    pattern: '(?i)(ExtensionInstallForcelist|ExtensionInstallSources|--load-extension=|--disable-extensions-except=|Software\\Policies\\(Google\\Chrome|Microsoft\\Edge|Mozilla\\Firefox|BraveSoftware)|/etc/(opt/chrome|chromium|brave)/policies/managed/|distribution/policies\.json|\blockPref\s*\(|\bpref\s*\(\s*["'']security\.|"Extensions"\s*:\s*\{[^\n]*"Install"|ExtensionSettings[^\n]*installation_mode[^\n]*force_installed)'
+    severity: 高
+    literal: 'ExtensionInstallForcelist（扩展 安装 强制列表）/ lockPref（锁定 首选项）：用企业策略强制浏览器装某个扩展、锁死某个设置'
+    plain: '正常个人电脑不会有“企业策略”。有人把浏览器扩展写进强制安装列表，或用 policies.json / user.js 锁住设置，那这个扩展/设置你在浏览器界面里删不掉、改不了，重装浏览器也会回来。扩展能看到你所有网页内容和输入。'
+    consequence: '浏览器被持久控制：读取所有页面、输入、密码自动填充；用户无法从界面移除。'
+    authority: ['MITRE ATT&CK T1176 浏览器扩展', 'MITRE ATT&CK T1112 修改注册表', 'Chrome 企业策略文档：ExtensionInstallForcelist']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 必须删除
+
+  - id: IN014
+    name: 浏览器主页 / 新标签页 / 搜索 / 代理 劫持
+    languages: [any]
+    pattern: '(?i)(HomepageLocation|NewTabPageLocation|RestoreOnStartupURLs|DefaultSearchProviderSearchURL|DefaultSearchProviderEnabled|browser\.startup\.homepage|browser\.newtabpage\.enabled|keyword\.URL|ProxySettings|ProxyServer|ProxyPacUrl|AutoConfigURL|ProxyMode|netsh\s+winhttp\s+set\s+proxy|Set-ItemProperty[^\n]*Internet Settings[^\n]*Proxy|network\.proxy\.(type|http|autoconfig_url)|gsettings\s+set\s+org\.gnome\.system\.proxy)'
+    severity: 高
+    literal: 'HomepageLocation / ProxyServer / AutoConfigURL（主页位置 / 代理服务器 / 自动配置地址）：把浏览器的主页、搜索或所有流量指到别处'
+    plain: '“劫持跳转”通常就是这几项：你打开浏览器就到某个页面、搜什么都先经过某个站、或者所有网络请求先经过某台代理机器（那台机器就能看到并改掉你的流量）。写在策略、注册表或 user.js 里的话，你在设置里改回去也会被改回来。'
+    consequence: '流量被中间人观察或篡改；搜索与主页被替换；用户改不回来。'
+    authority: ['MITRE ATT&CK T1557 中间人', 'MITRE ATT&CK T1176 浏览器扩展', 'CWE-350 依赖反向 DNS/不可信来源']
+    is_script: false
+    exploit_sensitive: false
+    disposition: 必须删除
+
+  - id: IN015
+    name: 定时器 / 自动重启服务 / 定时开放端口
+    languages: [any]
+    pattern: '(?i)(^\s*Restart\s*=\s*(always|on-failure|on-abnormal)\b|^\s*OnCalendar\s*=|^\s*OnBootSec\s*=|^\s*OnUnitActiveSec\s*=|^\s*ListenStream\s*=\s*(0\.0\.0\.0:|\[::\]:|\d+\s*$)|\bufw\s+allow\s+\d|iptables\s+-[AI]\s+INPUT[^\n]*-j\s+ACCEPT|firewall-cmd[^\n]*--add-port|netsh\s+advfirewall\s+firewall\s+add\s+rule|New-NetFirewallRule[^\n]*-Direction\s+Inbound|^\s*(RunAtLoad|KeepAlive|StartInterval|StartCalendarInterval)\b|<key>(RunAtLoad|KeepAlive|StartInterval|StartCalendarInterval)</key>|X-GNOME-Autostart-enabled\s*=\s*true)'
+    severity: 高
+    literal: 'Restart=always / OnCalendar= / ListenStream=0.0.0.0:端口 / KeepAlive（重启=总是 / 按日历触发 / 监听所有地址 / 保持存活）：让某个服务死了自动复活、定时启动、或定时对外开端口'
+    plain: '这些写在 systemd 单元、macOS plist、防火墙脚本里的项本身是正常功能，但组合在一个你不认识的服务上，就是“杀不死、按时醒、还对外开门”的持久化后门。审它时看：这个服务是谁装的、ExecStart 指向什么、端口开给谁。'
+    consequence: '持久化 + 定时暴露端口；kill 掉立刻复活。'
+    authority: ['MITRE ATT&CK T1543.002 创建系统进程：systemd 服务', 'MITRE ATT&CK T1053.006 计划任务：systemd 定时器', 'MITRE ATT&CK T1562.004 关闭或修改系统防火墙', 'MITRE ATT&CK T1543.001 Launch Agent']
+    is_script: true
+    exploit_sensitive: false
+    disposition: 必须修复
+
