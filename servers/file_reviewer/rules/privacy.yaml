@@ -104,6 +104,19 @@ rules:
     is_script: false
     exploit_sensitive: false
 
+  - id: PR010
+    name: Windows 凭据管理器 / DPAPI / 登录进程内存
+    languages: [any]
+    pattern: '(?i)(\bcmdkey\s+/list|\bvaultcmd\b|CryptUnprotectData|Windows\.Security\.Credentials|PasswordVault|\\config\\SAM\b|\bntds\.dit\b|\blsass(\.exe)?\b[^\n]*(dump|MiniDump|procdump)|\bsekurlsa\b|\bmimikatz\b|Get-StoredCredential|\\Microsoft\\Credentials\\|\\Microsoft\\Protect\\)'
+    severity: 严重
+    literal: 'CryptUnprotectData / cmdkey /list / lsass dump（解密受保护数据 / 列出保存的凭据 / 转储登录进程内存）：读取 Windows 保存的账号密码'
+    plain: 'Windows 把你保存过的密码（网站、远程桌面、Wi-Fi）加密存在"凭据管理器"里。这些调用就是在解开它们，或者直接从系统登录进程的内存里把密码抠出来。'
+    consequence: 'Windows 上保存的全部账号密码被盗；域环境下可横向渗透到其他机器。'
+    authority: ['MITRE ATT&CK T1555.004 Windows 凭据管理器', 'T1003.001 LSASS 内存', 'CWE-522']
+    is_script: false
+    exploit_sensitive: true
+    disposition: 必须删除
+
   - id: PR009
     name: 敏感数据写入日志
     languages: [python, javascript, typescript]

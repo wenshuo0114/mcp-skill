@@ -88,6 +88,42 @@ rules:
     is_script: true
     exploit_sensitive: false
 
+  - id: IN009
+    name: Windows 注册表启动项 / reg add
+    languages: [any]
+    pattern: '(?i)(HK(LM|CU|EY_LOCAL_MACHINE|EY_CURRENT_USER)\\[^\n]*CurrentVersion\\(Run|RunOnce|Explorer\\Shell Folders|Winlogon)|\breg(\.exe)?\s+add\b|New-ItemProperty\s+[^\n]*Run|Set-ItemProperty\s+[^\n]*(Run|Winlogon|Userinit|Shell)\b|Image File Execution Options|AppInit_DLLs)'
+    severity: 高
+    literal: 'reg add HKLM\…\CurrentVersion\Run（注册表 添加 开机自启项）：往 Windows 注册表写开机自动运行'
+    plain: '程序往 Windows 注册表的"开机自启"位置写了东西。以后每次开机它都会自动跑。这是 Windows 上最常见的持久化手法。'
+    consequence: '持久化后门；难以清除。'
+    authority: ['MITRE ATT&CK T1547.001 注册表 Run 键', 'CWE-506']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: IN010
+    name: Windows 启动文件夹 / WMI 订阅 / 服务安装
+    languages: [any]
+    pattern: '(?i)(\\Start Menu\\Programs\\Startup|shell:startup|__EventFilter|CommandLineEventConsumer|Register-WmiEvent|Register-CimIndicationEvent|\bsc(\.exe)?\s+create\b|New-Service\s|Set-Service\s+[^\n]*-StartupType\s+Automatic)'
+    severity: 高
+    literal: 'Startup 文件夹 / Register-WmiEvent / sc create（启动文件夹 / 注册 WMI 事件 / 创建服务）：另外几种 Windows 开机自启方式'
+    plain: '把程序放进开机启动文件夹、注册成系统服务、或者用 WMI 事件订阅（一种很隐蔽的方式）让自己被自动触发。'
+    consequence: '持久化；WMI 订阅尤其难被发现。'
+    authority: ['MITRE ATT&CK T1547.001 / T1546.003 / T1543.003']
+    is_script: true
+    exploit_sensitive: false
+
+  - id: IN011
+    name: PowerShell 绕过执行策略 / 编码命令 / 隐藏窗口
+    languages: [any]
+    pattern: '(?i)(Set-ExecutionPolicy\s+(Bypass|Unrestricted)|-ExecutionPolicy\s+(Bypass|Unrestricted)|-(EncodedCommand|enc|ec)\s+[A-Za-z0-9+/=]{20,}|-WindowStyle\s+Hidden|-w\s+hidden|-NoProfile\s+-NonInteractive\s+-Command|Add-MpPreference\s+-ExclusionPath|powershell[^\n]*-nop\s+-w\s+hidden)'
+    severity: 严重
+    literal: 'powershell -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand …（绕过执行策略 隐藏窗口 编码后的命令）'
+    plain: '同时出现"绕过安全策略"、"窗口藏起来"、"命令是编码过的看不见内容"——三件事凑一起，几乎只有恶意脚本会这么写。'
+    consequence: '静默执行隐藏内容；关闭 Windows Defender 排除项。'
+    authority: ['MITRE ATT&CK T1059.001 PowerShell', 'T1027 混淆', 'T1562.001 削弱防御']
+    is_script: true
+    exploit_sensitive: true
+
   - id: IN008
     name: 自我删除 / 清除痕迹
     languages: [shell, python, any]

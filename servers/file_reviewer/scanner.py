@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Iterable
 
@@ -30,17 +30,38 @@ LANG_BY_EXT: dict[str, str] = {
     ".toml": "toml", ".ini": "toml", ".cfg": "toml", ".env": "toml",
     ".md": "md", ".mdx": "md", ".markdown": "md", ".rst": "md",
     ".txt": "txt", ".text": "txt",
+    # Windows
+    ".psm1": "shell", ".psd1": "shell", ".vbs": "shell", ".wsf": "shell", ".hta": "html", ".reg": "toml",
 }
 LANG_BY_NAME: dict[str, str] = {
     "dockerfile": "dockerfile", "makefile": "shell", "requirements.txt": "txt",
     "requirements-dev.txt": "txt", "constraints.txt": "txt", "pipfile": "toml",
     ".bashrc": "shell", ".zshrc": "shell", ".profile": "shell", ".gitconfig": "toml",
+    "config": "toml", "exclude": "txt",  # .git/config, .git/info/exclude
+    "pre-commit": "shell", "post-commit": "shell", "pre-push": "shell", "post-checkout": "shell",
+    "post-merge": "shell", "prepare-commit-msg": "shell", "commit-msg": "shell", "pre-rebase": "shell",
 }
+# 只跳过纯缓存/依赖目录。dist、build、.vscode、.idea、.cursor 等一律审（用户要求）。
 SKIP_DIRS = {
-    ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv", "env",
-    ".tox", ".mypy_cache", ".pytest_cache", "dist", "build", ".next", ".nuxt",
-    "target", ".idea", ".vscode", "coverage", ".cache",
+    ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
+    ".tox", ".mypy_cache", ".pytest_cache", ".next", ".nuxt", "target", "coverage", ".cache",
 }
+# .git 目录里只看这些（其余是对象库，二进制且无意义）
+GIT_DIR_ALLOW = {"hooks", "config", "info", "modules"}
+
+# 项目级 AI 助手 / 编辑器配置目录与文件：其中的 skill、rules、mcp、hooks、settings 全部不可信，优先审
+AI_CONFIG_NAMES = {
+    ".cursor", ".claude", ".codex", ".gemini", ".vscode", ".idea", ".windsurf", ".cline", ".continue",
+    ".aider", ".aider.conf.yml", ".cursorrules", ".windsurfrules", ".clinerules", ".copilot",
+    "AGENTS.md", "CLAUDE.md", "GEMINI.md", "CODEX.md", ".mcp.json", "mcp.json", "SKILL.md",
+    "copilot-instructions.md", "settings.json", "tasks.json", "launch.json", "extensions.json",
+}
+# 仓库自述类文档：名字里含这些词的一律不可信（包括用户自己写的）
+UNTRUSTED_DOC_KEYWORDS = (
+    "readme", "必读", "硬规矩", "规矩", "交接", "说明", "指南", "手册", "须知", "使用前", "install",
+    "setup", "getting", "start", "guide", "handover", "onboarding", "rules", "instructions", "prompt",
+    "contributing", "agents", "claude", "gemini", "codex", "cursor",
+)
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_SNIPPET_CHARS = 300
 
@@ -185,15 +206,45 @@ def iter_source_files(root: Path) -> Iterable[Path]:
         yield root
         return
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".git"))
+        cur = Path(dirpath)
+        inside_git = ".git" in cur.relative_to(root).parts if cur != root else False
+        if cur.name == ".git" or inside_git:
+            # .git 内只进 hooks / info / modules，其余对象库跳过
+            rel_parts = cur.relative_to(root).parts
+            depth_after_git = len(rel_parts) - rel_parts.index(".git") - 1
+            if depth_after_git == 0:
+                dirnames[:] = sorted(d for d in dirnames if d in GIT_DIR_ALLOW)
+                filenames = [f for f in filenames if f in ("config", "description")]
+            else:
+                dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+                filenames = [f for f in filenames if not f.endswith(".sample")]
+        else:
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for fn in sorted(filenames):
-            p = Path(dirpath) / fn
+            p = cur / fn
             try:
                 if p.is_symlink() or p.stat().st_size > MAX_FILE_BYTES:
                     continue
             except OSError:
                 continue
             yield p
+
+
+def is_ai_config_path(rel_path: str) -> bool:
+    parts = Path(rel_path).parts
+    return any(part in AI_CONFIG_NAMES for part in parts) or Path(rel_path).name in AI_CONFIG_NAMES
+
+
+def is_untrusted_doc(rel_path: str) -> bool:
+    p = Path(rel_path)
+    if p.suffix.lower() not in (".md", ".mdx", ".markdown", ".rst", ".txt", ".text", ""):
+        return False
+    low = p.stem.lower()
+    return any(k in low for k in UNTRUSTED_DOC_KEYWORDS)
+
+
+def is_git_internal(rel_path: str) -> bool:
+    return ".git" in Path(rel_path).parts
 
 
 def read_lines(path: Path) -> list[str]:
