@@ -32,12 +32,17 @@ LANG_BY_EXT: dict[str, str] = {
     ".txt": "txt", ".text": "txt",
     # Windows
     ".psm1": "shell", ".psd1": "shell", ".vbs": "shell", ".wsf": "shell", ".hta": "html", ".reg": "toml",
+    # 持久化位置常见格式：systemd 单元、macOS 启动项、Linux 桌面自启、各类 conf
+    ".service": "toml", ".timer": "toml", ".socket": "toml", ".path": "toml", ".desktop": "toml",
+    ".plist": "html", ".conf": "toml", ".preload": "txt", ".js.preferences": "javascript",
 }
 LANG_BY_NAME: dict[str, str] = {
     "dockerfile": "dockerfile", "makefile": "shell", "requirements.txt": "txt",
     "requirements-dev.txt": "txt", "constraints.txt": "txt", "pipfile": "toml",
     ".bashrc": "shell", ".zshrc": "shell", ".profile": "shell", ".gitconfig": "toml",
     "config": "toml", "exclude": "txt",  # .git/config, .git/info/exclude
+    "ld.so.preload": "txt", "hosts": "txt", "crontab": "shell", "rc.local": "shell", "authorized_keys": "txt",
+    "environment": "toml", "user.js": "javascript", "policies.json": "json", "hgrc": "toml",
     "pre-commit": "shell", "post-commit": "shell", "pre-push": "shell", "post-checkout": "shell",
     "post-merge": "shell", "prepare-commit-msg": "shell", "commit-msg": "shell", "pre-rebase": "shell",
 }
