@@ -49,7 +49,28 @@ description: 只读代码文件审查。进入新文件夹时先只读、不执�
 - 用户要求严格审查、或项目来源不明、或用户说"哪怕本地用也要审"时：`review_open(path, strict=True)`，一个目录都不跳（只跳 `.git/objects` 这种纯二进制对象库）。也可设环境变量 `MCP_SKILL_STRICT=1` 让默认就是严格。
 - 严格模式下文件数会暴涨，走"大项目先摘要"流程分批扫。
 
-**用户级 / 程序级**：用户要求时调用 `review_user_level_configs()`，扫 `~/.cursor` `~/.claude` `~/.codex` `~/.gemini` `~/.vscode` `~/.config/Code/User` `/opt` 下相关目录（Windows 对应 `AppData\Roaming\Cursor\User` 等）。只扫白名单里实际存在的路径，不遍历整盘；结果进独立报告 `用户级配置.md`。这些目录里 Cursor / Claude / Codex 等平台预装的技能与钩子，同样不可信、同样审。
+**用户级 / 程序级**：用户要求时调用 `review_user_level_configs()`，扫 `~/.cursor` `~/.claude` `~/.codex` `~/.gemini` `~/.vscode` `~/.config/Code/User` `/opt` 下相关目录（Windows 对应 `AppData\Roaming\Cursor\User` 等）。这是常见位置的**快捷方式**，只列白名单里实际存在的路径；结果进独立报告 `用户级配置.md`。这些目录里 Cursor / Claude / Codex 等平台预装的技能与钩子，同样不可信、同样审。**白名单不是范围上限**——藏东西的人恰恰会放在白名单之外，范围要由用户定，见下一节。
+
+## 一之二之二、审查范围四选一：由用户选，不替用户缩小
+
+调用 `review_scope(mode, path, strict=True, confirm, include_other_users, max_files)`，`mode` 四选一，**原样列给用户，不替用户选**：
+
+| mode | 范围 | 需要什么 |
+|---|---|---|
+| `文件` | 任意位置的一个文件 | `path` |
+| `文件夹` | 任意位置的一个目录（不限于当前仓库、不限于白名单） | `path` |
+| `整仓` | `path` 所在 git 仓库的根，严格模式 | `path` |
+| `整盘` | Linux/macOS 从 `/` 起，Windows 所有盘符 | 用户原话 `✅ 授权只读扫描整盘` |
+
+整盘的规矩：
+- 只跳内核伪文件系统（`/proc` `/sys` `/dev` `/run`）：它们不是磁盘上的文件，读了会挂或无限长。不跳别的。
+- 不跟随符号链接（防环）；设备、管道、套接字不读；无权限的目录**如实报数量**，不假装扫过了。
+- **默认跳过其他用户的家目录**（`/home/别人` `/Users/别人` `C:\Users\别人`）。别人的目录是别人的隐私，哪怕只读也不能顺手看。用户要包含，必须另一句确认 `✅ 授权只读扫描整盘，含其他用户目录`，你要明说：只有这台机器完全属于用户、或用户对它有管理职责时才这样做。
+- 文件清单写在状态目录，不写进被审位置。返回里有：文件数、耗时、跳过的伪文件系统、跳过的其他用户目录、无权限目录数、密钥文件告知。**全部原样转达。**
+- 范围大就按"大项目先摘要"分批 `review_scan(offset, limit)`，每批报进度。
+- 选定范围后，`review_scan` / `review_secrets_inventory` / `review_references_of` / `review_read` 都在这个清单内进行，不悄悄扩大也不悄悄缩小。`review_open` 会回到仓库模式并清掉范围。
+
+为什么必须给整盘这个选项：跳过任何一处都是"我替你决定了那里不用看"。上一版只给白名单，是我的设计漏洞，已改。
 
 ## 一之三、密钥 / 私钥 / 凭证 / 环境变量：只报路径，不报值
 

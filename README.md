@@ -50,7 +50,7 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 | `MCP_SKILL_LARGE_FILES` / `MCP_SKILL_LARGE_LINES` | `200` / `50000` | 大项目阈值，超过先出摘要 |
 | `MCP_SKILL_STRICT` | 空 | 设为 `1` 时默认严格模式：不跳过任何目录（见下文） |
 
-## 工具清单（17 + 2）
+## 工具清单（18 + 2）
 
 | 工具 | 只读 | 作用 |
 |---|---|---|
@@ -60,7 +60,8 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 | `review_references_of(symbol)` | 是 | 找一个符号 / 文件名 / 地址在仓库内的全部引用位置，供删除高风险项时连根处置、验证不可再利用 |
 | `review_file_metadata(file)` | 是 | 创建 / 修改 / 首次提交 / 最后提交日期、sha256、与审查时是否一致 |
 | `review_external_paths()` | 是 | 找指向其他仓库 / 路径变量 / git 地址的引用，返回必须转达的三选一 |
-| `review_user_level_configs(extra_paths, offset, limit)` | 是 | 审 `~/.cursor` `~/.claude` `~/.codex` `~/.gemini` `~/.vscode` `/opt/*` 等白名单目录（含 Windows 路径），独立报告 |
+| `review_scope(mode, path, strict, confirm, include_other_users, max_files)` | 是 | **审查范围四选一**：`文件` / `文件夹` / `整仓` / `整盘`，任意位置、不限白名单。整盘需 `confirm="✅ 授权只读扫描整盘"`，默认跳过其他用户家目录（包含需另一句确认）；只跳 `/proc /sys /dev /run`，不跟符号链接，无权限目录如实报数 |
+| `review_user_level_configs(extra_paths, offset, limit)` | 是 | 常见位置快捷方式：`~/.cursor` `~/.claude` `~/.codex` `~/.gemini` `~/.vscode` `/opt/*` 等（含 Windows 路径），独立报告。不是范围上限 |
 | `review_secrets_inventory(include_user_level)` | 是 | 密钥 / 私钥 / 凭证 / 环境变量清单：路径、行号、变量名、日期、git 跟踪、引用次数、停用判断。**不报值** |
 | `report_set_header` / `report_write_decision` / `report_write_fix` / `report_external_choice` / `report_path` | 写报告 | 报告头部、用户决定、修复记录（前后 diff，必须带回滚点名）、外部引用选择、报告路径 |
 | `review_queue_add` / `review_queue_list` / `review_queue_next` | 写状态 | 计划审查列表 |
@@ -68,6 +69,10 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 | `rollback_restore(name, confirm)` | **写仓库** | 点名恢复；必须 `confirm="用户已授权恢复 <名>"` |
 
 "写"的都写在被审查仓库**之外**；唯一会改仓库内文件的是 `rollback_restore`，且要确认词。没有任何执行命令的工具。
+
+## 审查范围：四选一，由你选
+
+`review_scope(mode, path)`：`文件`（任意一个文件）、`文件夹`（任意目录，不限于仓库或白名单）、`整仓`（所在 git 仓库根，严格模式）、`整盘`（`/` 或所有盘符）。整盘只跳内核伪文件系统 `/proc /sys /dev /run`，不跟随符号链接，设备/管道/套接字不读，无权限目录如实报数量。**默认跳过其他用户的家目录**——别人的目录是别人的隐私；要包含需要另一句确认，且只在这台机器完全属于你或你有管理职责时才做。文件清单写在状态目录，之后的扫描 / 凭据清单 / 引用查找都在清单内进行。本机实测：20 万个文件枚举约 6 秒。
 
 ## 跳过的目录：如实说
 
