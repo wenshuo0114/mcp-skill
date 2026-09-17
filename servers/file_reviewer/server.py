@@ -97,12 +97,23 @@ def _report() -> Report:
 
 
 def _scope_roots() -> list[Path]:
-    """允许读取的范围：当前仓库 + 用户通过 review_user_level_configs 明确纳入的白名单路径。"""
+    """允许读取的范围：当前仓库 + review_scope 选定的范围根 + 用户通过 review_user_level_configs 纳入的路径。"""
     cur = _current_repo()
+    state = rc.load_state()
     roots = [Path(cur["仓库根目录"]).resolve()]
-    for p in rc.load_state().get("用户级审查范围", []):
+    for p in (state.get("当前范围") or {}).get("根路径", []):
+        roots.append(Path(p).resolve())
+    for p in state.get("用户级审查范围", []):
         roots.append(Path(p).resolve())
     return roots
+
+
+def _scope_files() -> list[Path] | None:
+    """review_scope 选定范围后缓存的文件清单；未选定返回 None（按仓库遍历）。"""
+    scope = rc.load_state().get("当前范围")
+    if not scope:
+        return None
+    return rc.load_scope_files(scope["文件清单文件"])
 
 
 def _strict() -> bool:
@@ -179,6 +190,7 @@ def review_open(path: str, strict: bool | None = None) -> dict[str, Any]:
     switch = rc.switch_repo(info)
     state = rc.load_state()
     state["当前仓库"]["严格模式"] = strict
+    state["当前范围"] = None
     rc.save_state(state)
     report = Report(info.仓库名, info.仓库根目录)
     inv = rc.inventory(info.仓库根目录, strict)
@@ -234,7 +246,7 @@ def review_open(path: str, strict: bool | None = None) -> dict[str, Any]:
 @_tool(read_only=True)
 def review_user_level_configs(extra_paths: list[str] | None = None, offset: int = 0, limit: int = 3) -> dict[str, Any]:
     """审查用户级 / 程序级 AI 助手与编辑器配置（~/.cursor ~/.claude ~/.codex ~/.gemini ~/.vscode /opt 下相关目录，
-    Windows 对应 AppData 路径）。只扫白名单里实际存在的路径，不遍历整盘。按路径分批（offset/limit）。
+    Windows 对应 AppData 路径）。这是「常见位置快捷方式」，只列白名单里实际存在的路径；要扫整盘 / 整仓 / 任意文件夹 / 任意文件，用 review_scope。按路径分批（offset/limit）。
     这些目录里的 skill / rules / mcp.json / hooks 全部视为不可信。结果写入独立报告 _用户级配置.md。"""
     paths = rc.user_level_config_paths(extra_paths)
     batch = paths[offset: offset + limit]
@@ -283,13 +295,105 @@ def review_user_level_configs(extra_paths: list[str] | None = None, offset: int 
     }
 
 
+_DISK_CONFIRM = "✅ 授权只读扫描整盘"
+_DISK_CONFIRM_OTHERS = "✅ 授权只读扫描整盘，含其他用户目录"
+
+
+@_tool(read_only=True)
+def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = "",
+                 include_other_users: bool = False, max_files: int = 0) -> dict[str, Any]:
+    """选定审查范围，四选一由用户决定：mode = "文件" | "文件夹" | "整仓" | "整盘"。
+    - 文件 / 文件夹：path 指向任意位置，不限于当前仓库、不限于白名单。
+    - 整仓：path 所在 git 仓库的根，等同 review_open(strict=True) 并缓存文件清单。
+    - 整盘：Linux/macOS 从 / 起、Windows 所有盘符；需要 confirm="✅ 授权只读扫描整盘"。
+      默认跳过其他用户的家目录（别人的目录是别人的隐私）；include_other_users=True 需要
+      confirm="✅ 授权只读扫描整盘，含其他用户目录"，且只应在这台机器完全属于你、或你对它有管理职责时使用。
+      只跳伪文件系统（/proc /sys /dev /run）；不跟随符号链接；设备、管道、套接字不读。
+    strict 默认 True：不跳过任何目录。max_files=0 不设上限。
+    文件清单写在状态目录（不写进被审位置），之后 review_scan / review_secrets_inventory / review_references_of 都在此范围内进行。"""
+    mode = mode.strip()
+    if mode not in rc.SCOPE_MODES:
+        raise ValueError(f"mode 必须是 {list(rc.SCOPE_MODES)} 之一，收到：{mode!r}")
+    notes: list[str] = []
+    if mode == "整盘":
+        expected = _DISK_CONFIRM_OTHERS if include_other_users else _DISK_CONFIRM
+        if confirm.strip() != expected:
+            return {
+                "需要授权": True,
+                "说明": "整盘扫描会读取这台机器上你有权限读的所有普通文件（只读、不执行、不联网、不外传；密钥值一律隐去）。"
+                      "耗时可能很长；报告里会出现大量路径。默认跳过其他用户的家目录。",
+                "如何授权": f"请原话回复：{expected}",
+                "其他用户目录": ("将包含" if include_other_users else "默认跳过")
+                          + f"：{[str(x) for x in rc.other_user_homes()]}"
+                          + ("" if include_other_users else f"。如需包含，改用 include_other_users=True 并回复：{_DISK_CONFIRM_OTHERS}。"
+                             "只有这台机器完全属于你、或你对它有管理职责时才这样做——别人的目录是别人的隐私。"),
+            }
+        roots = rc.disk_roots()
+        name = f"整盘-{os.uname().nodename if hasattr(os, 'uname') else os.environ.get('COMPUTERNAME', 'host')}"
+        root_str = str(roots[0])
+        if include_other_users:
+            notes.append("已按你的确认包含其他用户目录。请确保你对这台机器有管理职责。")
+    else:
+        if not path:
+            raise ValueError(f"mode={mode} 需要 path")
+        p = Path(path).expanduser().resolve()
+        if not p.exists():
+            raise FileNotFoundError(f"路径不存在：{p}")
+        if mode == "文件":
+            if not p.is_file():
+                raise ValueError(f"mode=文件 但 {p} 不是文件")
+            roots, name, root_str = [p], f"文件-{p.name}", str(p.parent)
+        elif mode == "文件夹":
+            if not p.is_dir():
+                raise ValueError(f"mode=文件夹 但 {p} 不是文件夹")
+            roots, name, root_str = [p], p.name or str(p), str(p)
+        else:  # 整仓
+            info = rc.identify_repo(p)
+            if not info.是否git仓库:
+                notes.append(f"{p} 不在 git 仓库内，按文件夹处理。")
+            roots, name, root_str = [Path(info.仓库根目录)], info.仓库名, info.仓库根目录
+
+    enum = rc.enumerate_scope(roots, strict=strict, include_other_users=include_other_users, max_files=max_files)
+    state = rc.load_state()
+    prev = state.get("当前仓库")
+    state["当前仓库"] = {"仓库名": name, "仓库根目录": root_str, "严格模式": strict, "范围模式": mode,
+                     "是否git仓库": (Path(root_str) / ".git").exists()}
+    state["当前范围"] = {"模式": mode, **enum}
+    if prev and prev.get("仓库名") != name:
+        state.setdefault("历史仓库", []).append(prev)
+    rc.save_state(state)
+
+    files = rc.load_scope_files(enum["文件清单文件"])
+    cred = [str(f) for f in files if rc._CREDENTIAL_FILE.search(str(f))]
+    report = Report(name, root_str)
+    report.set_header(
+        简介=f"范围模式「{mode}」的只读审查（{'严格：不跳过任何目录' if strict else '默认：跳过依赖与缓存目录'}）。根：{enum['根路径']}",
+        摘要={"文件数": enum["文件数"], "严格模式": strict, "范围模式": mode, "已截断": enum["已截断"],
+            "跳过的伪文件系统数": len(enum["跳过的伪文件系统"]), "跳过的其他用户目录数": len(enum["跳过的其他用户目录"]),
+            "无权限跳过的目录数": enum["无权限跳过的目录数"], "密钥/凭据类文件数": len(cred)},
+    )
+    saved = report.save()
+    large = enum["文件数"] > rc.LARGE_PROJECT_FILES
+    return {
+        "范围": state["当前范围"],
+        "是否大范围": large,
+        "说明": notes,
+        "密钥文件告知": (f"发现 {len(cred)} 个密钥/凭据类文件（前 50）：{cred[:50]}。读取前必须先得到你的中文确认；读取后只显示变量名，值一律隐去。"
+                    if cred else "未发现密钥/凭据类文件名。"),
+        "报告": saved,
+        "下一步": ("范围很大，先把上面的统计和密钥文件告知转达用户，再按 offset/limit 分批 review_scan；每批结束报进度。" if large
+                else "调用 review_scan 逐行扫描。"),
+        "提醒": "文件清单只存在状态目录，不写进被审位置。review_read 现在允许读取此范围内的文件（密钥文件仍需单独确认）。",
+    }
+
+
 @_tool(read_only=True)
 def review_secrets_inventory(include_user_level: bool = False) -> dict[str, Any]:
     """列出当前仓库（可选含已纳入的用户级配置目录）里的密钥 / 私钥 / 凭证 / 环境变量：
     完整路径、文件名、行号、变量名、创建/修改/提交日期、是否被 git 跟踪、是否被忽略、仓库内引用次数与停用判断。
     不输出任何密钥值。请把完整路径原样告诉用户，由用户自行打开核对变动与停用情况。"""
     cur = _current_repo()
-    results = [rc.secrets_inventory(cur["仓库根目录"], _RULES, strict=_strict())]
+    results = [rc.secrets_inventory(cur["仓库根目录"], _RULES, strict=_strict(), files=_scope_files())]
     if include_user_level:
         for p in rc.load_state().get("用户级审查范围", []):
             pp = Path(p)
@@ -310,9 +414,13 @@ def review_scan(path: str = "", offset: int = 0, limit: int = 50) -> dict[str, A
     返回结构化发现（含文件详细路径、文件名、行号、代码、中文直译、白话、后果、处置、权威依据），并写入报告。"""
     cur = _current_repo()
     root = Path(cur["仓库根目录"])
-    target = _inside_current_repo(Path(path).expanduser()) if path else root
     strict = _strict()
-    files = list(sc.iter_source_files(target, strict))
+    scoped = _scope_files() if not path else None
+    if scoped is not None:
+        files = scoped
+    else:
+        target = _inside_current_repo(Path(path).expanduser()) if path else root
+        files = list(sc.iter_source_files(target, strict))
     batch = files[offset: offset + limit]
     findings: list[sc.Finding] = []
     metas: list[dict] = []
@@ -397,7 +505,7 @@ def review_references_of(symbol: str, limit: int = 200) -> dict[str, Any]:
     root = Path(cur["仓库根目录"])
     hits: list[dict] = []
     scanned = 0
-    for f in sc.iter_source_files(root, _strict()):
+    for f in (_scope_files() or sc.iter_source_files(root, _strict())):
         if sc.is_probably_binary(f):
             continue
         scanned += 1

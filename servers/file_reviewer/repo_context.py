@@ -291,7 +291,7 @@ _OPT_ROOTS = ("/opt", "/usr/local/lib", "/usr/lib", "C:/Program Files", "C:/Prog
 
 
 def user_level_config_paths(extra: list[str] | None = None) -> list[dict]:
-    """返回实际存在的用户级/程序级配置路径。只列白名单里的，不会遍历整个磁盘。"""
+    """返回实际存在的用户级/程序级配置路径。这是常见位置的快捷方式，只列白名单；整盘请用 enumerate_scope(disk_roots())。"""
     found: list[dict] = []
     seen: set[str] = set()
 
@@ -320,6 +320,136 @@ def user_level_config_paths(extra: list[str] | None = None) -> list[dict]:
     return found
 
 
+# ---------- 审查范围：指定文件 / 指定文件夹 / 整仓 / 整盘 ----------
+
+SCOPE_MODES = ("文件", "文件夹", "整仓", "整盘")
+# 只跳这些：它们不是磁盘上的文件，是内核实时生成的伪文件系统，读了会挂、会无限长、或根本不是数据
+_PSEUDO_FS = ("/proc", "/sys", "/dev", "/run", "/System/Volumes/VM", "/System/Volumes/Preboot", "/private/var/vm")
+_SHARED_HOME_NAMES = {"public", "shared", "default", "default user", "all users", "lost+found"}
+
+
+def disk_roots() -> list[Path]:
+    """整盘的根：Linux/macOS 为 /，Windows 为所有存在的盘符。"""
+    if os.name == "nt":
+        import string
+        return [Path(f"{d}:\\") for d in string.ascii_uppercase if Path(f"{d}:\\").exists()]
+    return [Path("/")]
+
+
+def own_home() -> Path:
+    return Path(os.environ.get("HOME") or os.environ.get("USERPROFILE") or Path.home()).resolve()
+
+
+def other_user_homes() -> list[Path]:
+    """本机上不属于当前用户的家目录。整盘扫描默认跳过它们：别人的目录是别人的隐私，需要单独确认。"""
+    mine = own_home()
+    out: list[Path] = []
+    for parent in (Path("/home"), Path("/Users"), Path("C:/Users") if os.name == "nt" else None):
+        if parent is None or not parent.is_dir():
+            continue
+        try:
+            for child in parent.iterdir():
+                if not child.is_dir() or child.name.lower() in _SHARED_HOME_NAMES:
+                    continue
+                try:
+                    if child.resolve() == mine:
+                        continue
+                except OSError:
+                    pass
+                out.append(child)
+        except OSError:
+            pass
+    return sorted(out)
+
+
+def _scopes_dir() -> Path:
+    return STATE_DIR / "scopes"
+
+
+def enumerate_scope(roots: list[Path], *, strict: bool = True, include_other_users: bool = False,
+                    max_files: int = 0) -> dict:
+    """遍历给定根，把实际存在的普通文件清单写到状态目录（不写进被审目录），返回统计。
+    只跳伪文件系统与（默认）其他用户家目录；不跟随符号链接（防环）；非普通文件（设备、管道、套接字）不读。"""
+    from .scanner import DEFAULT_SKIP_DIRS, ALWAYS_SKIP_DIRS
+    started = datetime.now(timezone.utc)
+    skip_names = frozenset() if strict else DEFAULT_SKIP_DIRS
+    excluded_homes = {str(p) for p in other_user_homes()} if not include_other_users else set()
+    pseudo_hit: list[str] = []
+    homes_hit: list[str] = []
+    denied = 0
+    non_regular = 0
+    files: list[str] = []
+    truncated = False
+
+    def on_error(err: OSError):
+        nonlocal denied
+        denied += 1
+
+    for root in roots:
+        root = Path(root)
+        if root.is_file():
+            files.append(str(root.resolve()))
+            continue
+        for dirpath, dirnames, filenames in os.walk(root, onerror=on_error, followlinks=False):
+            cur = str(Path(dirpath))
+            if any(cur == pf or cur.startswith(pf + os.sep) for pf in _PSEUDO_FS):
+                pseudo_hit.append(cur); dirnames[:] = []; continue
+            if cur in excluded_homes:
+                homes_hit.append(cur); dirnames[:] = []; continue
+            keep = []
+            for d in sorted(dirnames):
+                full = os.path.join(dirpath, d)
+                if d in skip_names:
+                    continue
+                if any(full == pf or full.startswith(pf + os.sep) for pf in _PSEUDO_FS):
+                    pseudo_hit.append(full); continue
+                if full in excluded_homes:
+                    homes_hit.append(full); continue
+                rel_git = full.replace(os.sep, "/")
+                if any(rel_git.endswith("/" + a) for a in ALWAYS_SKIP_DIRS):
+                    continue
+                keep.append(d)
+            dirnames[:] = keep
+            for f in filenames:
+                full = Path(dirpath) / f
+                try:
+                    if not full.is_file() or full.is_symlink():
+                        non_regular += 1
+                        continue
+                except OSError:
+                    denied += 1
+                    continue
+                files.append(str(full))
+                if max_files and len(files) >= max_files:
+                    truncated = True
+                    break
+            if truncated:
+                break
+        if truncated:
+            break
+
+    scope_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    _scopes_dir().mkdir(parents=True, exist_ok=True)
+    list_path = _scopes_dir() / f"{scope_id}.txt"
+    list_path.write_text("\n".join(files), encoding="utf-8")
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    return {
+        "范围编号": scope_id, "文件清单文件": str(list_path), "文件数": len(files),
+        "根路径": [str(r) for r in roots], "严格模式": strict,
+        "已截断": truncated, "上限": max_files or None,
+        "跳过的伪文件系统": sorted(set(pseudo_hit)), "跳过的其他用户目录": sorted(set(homes_hit)),
+        "无权限跳过的目录数": denied, "非普通文件数(设备/管道/套接字/符号链接)": non_regular,
+        "耗时秒": round(elapsed, 1),
+    }
+
+
+def load_scope_files(list_path: str | Path) -> list[Path]:
+    p = Path(list_path)
+    if not p.exists():
+        return []
+    return [Path(l) for l in p.read_text(encoding="utf-8").splitlines() if l]
+
+
 # ---------- 密钥 / 私钥 / 凭证 / 环境变量 清单：只报路径与元数据，不报值 ----------
 
 _CREDENTIAL_FILE = re.compile(
@@ -346,11 +476,11 @@ def _git_ignored(root: Path, rel: str) -> bool | None:
 
 
 def secrets_inventory(root: Path | str, rules: list[Rule] | None = None, max_ref_files: int = 2000,
-                      strict: bool | None = None) -> dict:
+                      strict: bool | None = None, files: list[Path] | None = None) -> dict:
     root = Path(root).resolve()
     rules = [r for r in (rules or load_rules()) if r.category_id == "secrets"]
     is_git = (root / ".git").exists()
-    files = list(iter_source_files(root, strict))
+    files = list(files) if files is not None else list(iter_source_files(root, strict))
     entries: list[dict] = []
 
     # 先缓存文本内容，供引用计数
@@ -363,9 +493,15 @@ def secrets_inventory(root: Path | str, rules: list[Rule] | None = None, max_ref
                 except OSError:
                     pass
 
+    def _rel(p: Path) -> str:
+        try:
+            return str(p.relative_to(root))
+        except ValueError:
+            return str(p)
+
     def meta_for(p: Path) -> dict:
         m = file_metadata(p, root)
-        rel = str(p.relative_to(root))
+        rel = _rel(p)
         m["是否被git跟踪"] = _git_tracked(root, rel) if is_git else None
         m["是否被gitignore忽略"] = _git_ignored(root, rel) if is_git else None
         m.pop("sha256", None)
@@ -384,7 +520,7 @@ def secrets_inventory(root: Path | str, rules: list[Rule] | None = None, max_ref
         return n
 
     for p in files:
-        rel = str(p.relative_to(root))
+        rel = _rel(p)
         if _CREDENTIAL_FILE.search(rel):
             e = {"类型": "凭据/私钥/环境文件", "变量名": None, "行号": None, **meta_for(p), "仓库内引用次数": None}
             entries.append(e)
