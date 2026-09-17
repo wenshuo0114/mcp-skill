@@ -86,6 +86,47 @@ def test_iter_source_files_includes_git_hooks_dist_and_ai_config(risky_repo: Pat
     assert not any(r.startswith(".git/objects") for r in rels)
 
 
+def test_default_mode_skips_deps_but_strict_mode_does_not(risky_repo: Path, monkeypatch):
+    monkeypatch.delenv("MCP_SKILL_STRICT", raising=False)
+    default = {str(p.relative_to(risky_repo)) for p in sc.iter_source_files(risky_repo)}
+    strict = {str(p.relative_to(risky_repo)) for p in sc.iter_source_files(risky_repo, strict=True)}
+    hidden = {".venv/lib/python3.12/site-packages/zzz.pth", "node_modules/leftpad/package.json",
+              ".hg/hgrc", ".pytest_cache/v/note.txt"}
+    assert not (hidden & default), "默认模式应跳过这些目录"
+    assert hidden <= strict, "严格模式必须一个都不跳"
+    assert not any(r.startswith(".git/objects") for r in strict)
+    # 环境变量也能开严格模式
+    monkeypatch.setenv("MCP_SKILL_STRICT", "1")
+    assert hidden <= {str(p.relative_to(risky_repo)) for p in sc.iter_source_files(risky_repo)}
+
+
+def test_strict_mode_finds_what_skipping_hides(risky_repo: Path):
+    rules = sc.load_rules()
+    findings = []
+    for p in sc.iter_source_files(risky_repo, strict=True):
+        findings.extend(sc.scan_file(p, rules, risky_repo))
+    by_file = {}
+    for f in findings:
+        by_file.setdefault(str(Path(f.文件详细路径).relative_to(risky_repo)), set()).add(f.规则ID)
+    assert "DP009" in by_file[".venv/lib/python3.12/site-packages/zzz.pth"], ".pth 自动执行必须命中"
+    assert "DP010" in by_file[".hg/hgrc"], ".hg 钩子必须命中"
+    assert by_file.get("node_modules/leftpad/package.json"), "node_modules 里的 postinstall 必须命中"
+    assert any(r.startswith("II") for r in by_file.get(".pytest_cache/v/note.txt", set())), "缓存里的引导话语必须命中"
+
+
+def test_secret_hits_never_carry_the_value(risky_repo: Path):
+    rules = sc.load_rules()
+    findings = sc.scan_file(risky_repo / "src" / "app.py", rules, risky_repo)
+    sec = [f for f in findings if f.规则ID.startswith("SEC")]
+    assert sec, "应命中密钥规则"
+    for f in sec:
+        assert "sk-live-abcdefghijklmnop123456" not in f.代码
+        assert "已隐去" in f.代码
+        assert "API_KEY" in f.代码, "变量名要保留，便于定位"
+    env_findings = sc.scan_file(risky_repo / ".env", rules, risky_repo)
+    assert "p4ssw0rd" not in str([f.to_dict() for f in env_findings])
+
+
 def test_untrusted_classification():
     assert sc.is_ai_config_path(".cursor/mcp.json")
     assert sc.is_ai_config_path(".claude/CLAUDE.md")

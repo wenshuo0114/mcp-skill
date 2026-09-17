@@ -44,6 +44,70 @@ def test_read_is_enveloped_and_scoped(isolated_dirs, risky_repo: Path):
     assert "不在当前审查范围" in str(ei.value)
 
 
+def test_credential_file_read_requires_chinese_confirm_and_never_shows_values(isolated_dirs, risky_repo: Path):
+    s = isolated_dirs["server"]
+    r = s.review_open(str(risky_repo))
+    assert ".env" in r["密钥文件告知"] and "✅ 授权只读密钥文件" in r["密钥文件告知"]
+    assert r["清点"]["文件数"] >= 1 and r["摘要"] if "摘要" in r else True
+
+    denied = s.review_read(str(risky_repo / ".env"))
+    assert denied["需要授权"] is True
+    assert "✅ 授权只读密钥文件 .env" in denied["如何授权"]
+    assert "p4ssw0rd" not in str(denied)
+
+    wrong = s.review_read(str(risky_repo / ".env"), confirm="ok")
+    assert wrong["需要授权"] is True
+
+    ok = s.review_read(str(risky_repo / ".env"), confirm="✅ 授权只读密钥文件 .env")
+    assert ok["untrusted_content"] is True and ok["已授权只读"] is True
+    texts = [l["text"] for l in ok["lines"]]
+    assert any(t.startswith("DB_URL=") for t in texts), "变量名要保留"
+    assert "p4ssw0rd" not in str(ok) and "abcdefgh12345678" not in str(ok)
+    assert all("已隐去" in t or t == "EMPTY=" for t in texts)
+
+    # 普通文件里命中密钥规则的行也隐去值
+    rd = s.review_read(str(risky_repo / "src" / "app.py"), 3, 3)
+    assert "sk-live-abcdefghijklmnop123456" not in str(rd) and "API_KEY" in rd["lines"][0]["text"]
+
+    # 报告与状态目录里任何地方都不能出现值
+    s.review_scan()
+    s.review_secrets_inventory()
+    blob = ""
+    for d in (isolated_dirs["reports"], isolated_dirs["state"]):
+        for f in d.rglob("*"):
+            if f.is_file():
+                blob += f.read_text(encoding="utf-8", errors="ignore")
+    assert "p4ssw0rd" not in blob and "sk-live-abcdefghijklmnop123456" not in blob and "abcdefgh12345678" not in blob
+
+
+def test_strict_open_scans_hidden_dirs_and_records_mode(isolated_dirs, risky_repo: Path, monkeypatch):
+    s = isolated_dirs["server"]
+    monkeypatch.delenv("MCP_SKILL_STRICT", raising=False)
+    r0 = s.review_open(str(risky_repo))
+    assert r0["严格模式"] is False and "性能取舍" in r0["目录跳过说明"]
+    n_default = r0["清点"]["文件数"]
+    r1 = s.review_open(str(risky_repo), strict=True)
+    assert r1["严格模式"] is True and r1["清点"]["文件数"] > n_default
+    sc = s.review_scan()
+    assert sc["严格模式"] is True
+    ids = {f["规则ID"] for f in sc["发现"]}
+    assert {"DP009", "DP010"} <= ids
+    files = {f["文件详细路径"] for f in sc["发现"]}
+    assert any("zzz.pth" in f for f in files) and any("node_modules" in f for f in files)
+
+
+def test_references_of_symbol(isolated_dirs, risky_repo: Path):
+    s = isolated_dirs["server"]
+    s.review_open(str(risky_repo), strict=True)
+    refs = s.review_references_of("evil.example.net")
+    assert refs["引用数"] >= 3
+    assert any("zzz.pth" in f for f in refs["涉及文件"]) and any(".hg/hgrc" in f for f in refs["涉及文件"])
+    with pytest.raises(Exception):
+        s.review_references_of("ab")
+    refs2 = s.review_references_of("API_KEY")
+    assert "sk-live-abcdefghijklmnop123456" not in str(refs2)
+
+
 def test_requires_open_first(isolated_dirs, risky_repo: Path):
     s = isolated_dirs["server"]
     with pytest.raises(Exception) as ei:
