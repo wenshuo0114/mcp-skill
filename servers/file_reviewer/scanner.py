@@ -18,7 +18,7 @@ RULES_DIR = Path(__file__).parent / "rules"
 
 # 扩展名 → 语言标签。规则里的 languages 用同一套标签，"any" 表示全部。
 LANG_BY_EXT: dict[str, str] = {
-    ".py": "python", ".pyw": "python", ".pyi": "python",
+    ".py": "python", ".pyw": "python", ".pyi": "python", ".pth": "python",  # .pth 在 Python 启动时自动执行
     ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".jsx": "javascript",
     ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
     ".vue": "javascript", ".svelte": "javascript",
@@ -41,11 +41,21 @@ LANG_BY_NAME: dict[str, str] = {
     "pre-commit": "shell", "post-commit": "shell", "pre-push": "shell", "post-checkout": "shell",
     "post-merge": "shell", "prepare-commit-msg": "shell", "commit-msg": "shell", "pre-rebase": "shell",
 }
-# 只跳过纯缓存/依赖目录。dist、build、.vscode、.idea、.cursor 等一律审（用户要求）。
-SKIP_DIRS = {
+# 默认模式跳过的目录。诚实说明：这是性能取舍，不是安全判断——
+# node_modules / .venv 里是会被实际执行的第三方代码（.venv 的 *.pth 在 Python 启动时自动执行），
+# .next / target 是部署时真正运行的构建产物，.hg/hgrc 可配置钩子执行命令，缓存里的任何文本 AI 读到都可能被引导。
+# 严格模式（strict=True 或环境变量 MCP_SKILL_STRICT=1）一律不跳过。
+DEFAULT_SKIP_DIRS = frozenset({
     ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
     ".tox", ".mypy_cache", ".pytest_cache", ".next", ".nuxt", "target", "coverage", ".cache",
-}
+})
+# 严格模式下也不进的：只有二进制对象库，没有可读文本
+ALWAYS_SKIP_DIRS = frozenset({".git/objects", ".git/lfs", ".hg/store"})
+SKIP_DIRS = DEFAULT_SKIP_DIRS  # 向后兼容的别名
+
+
+def strict_mode_default() -> bool:
+    return os.environ.get("MCP_SKILL_STRICT", "").strip().lower() in ("1", "true", "yes", "on", "严格")
 # .git 目录里只看这些（其余是对象库，二进制且无意义）
 GIT_DIR_ALLOW = {"hooks", "config", "info", "modules"}
 
@@ -200,13 +210,21 @@ def is_probably_binary(path: Path) -> bool:
     return b"\x00" in chunk
 
 
-def iter_source_files(root: Path) -> Iterable[Path]:
+def iter_source_files(root: Path, strict: bool | None = None) -> Iterable[Path]:
+    """遍历待审文件。strict=True 时不跳过任何目录（只跳过纯二进制对象库）。"""
+    if strict is None:
+        strict = strict_mode_default()
+    skip = frozenset() if strict else DEFAULT_SKIP_DIRS
     root = Path(root)
     if root.is_file():
         yield root
         return
     for dirpath, dirnames, filenames in os.walk(root):
         cur = Path(dirpath)
+        rel = cur.relative_to(root).as_posix() if cur != root else ""
+        if any(rel == a or rel.startswith(a + "/") for a in ALWAYS_SKIP_DIRS):
+            dirnames[:] = []
+            continue
         inside_git = ".git" in cur.relative_to(root).parts if cur != root else False
         if cur.name == ".git" or inside_git:
             # .git 内只进 hooks / info / modules，其余对象库跳过
@@ -216,10 +234,10 @@ def iter_source_files(root: Path) -> Iterable[Path]:
                 dirnames[:] = sorted(d for d in dirnames if d in GIT_DIR_ALLOW)
                 filenames = [f for f in filenames if f in ("config", "description")]
             else:
-                dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+                dirnames[:] = sorted(d for d in dirnames if d not in skip)
                 filenames = [f for f in filenames if not f.endswith(".sample")]
         else:
-            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+            dirnames[:] = sorted(d for d in dirnames if d not in skip)
         for fn in sorted(filenames):
             p = cur / fn
             try:
@@ -252,6 +270,19 @@ def read_lines(path: Path) -> list[str]:
         return fh.read().splitlines()
 
 
+_ASSIGN_SPLIT = re.compile(r"^(.*?[A-Za-z0-9_\"'\]\)]\s*[:=]\s*)(.+)$")
+
+
+def redact_secret_line(line: str, match: re.Match) -> str:
+    """密钥类命中：只保留变量名/结构，把值替换为占位。报告、状态、对话里都不出现值本身。"""
+    stripped = line.strip()
+    m = _ASSIGN_SPLIT.match(stripped)
+    if m and match.start() >= 0:
+        return f"{m.group(1)}[密钥值已隐去，{len(m.group(2))} 字符]"
+    hit = match.group(0)
+    return stripped.replace(hit, f"[密钥值已隐去，{len(hit)} 字符]")
+
+
 def _reference_exists(match_text: str, file_path: Path, repo_root: Path) -> bool | None:
     """对 check_exists 规则：核对文档/配置里提到的文件是否真的在仓库里。"""
     candidate = match_text.strip("\"'`() ")
@@ -278,7 +309,7 @@ def scan_file(path: Path | str, rules: list[Rule], repo_root: Path | str | None 
             m = rule.pattern.search(line)
             if not m:
                 continue
-            snippet = line.strip()
+            snippet = redact_secret_line(line, m) if rule.category_id == "secrets" else line.strip()
             if len(snippet) > MAX_SNIPPET_CHARS:
                 snippet = snippet[:MAX_SNIPPET_CHARS] + " …（已截断）"
             exists: bool | None = None

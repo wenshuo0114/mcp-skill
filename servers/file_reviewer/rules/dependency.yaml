@@ -90,6 +90,31 @@ rules:
     exploit_sensitive: false
     disposition: 建议修复
 
+  - id: DP009
+    name: site-packages 的 .pth 文件夹带执行代码
+    languages: [python]
+    pattern: '^\s*import\s+[\w.]+\s*;\s*\S+'
+    severity: 严重
+    literal: 'import os; os.system(…)（导入 操作系统；执行 …）：写在 .pth 文件里、以 import 开头、用分号接着执行的一行代码'
+    plain: 'Python 启动时会自动读 site-packages 目录里所有 .pth 文件，凡是以 import 开头的行都会直接执行——不需要任何人去调用它。这是 .venv / venv 目录里最隐蔽的自动执行点，也是"跳过 .venv 不审"最大的风险。'
+    consequence: '每次运行任何 Python 程序都会先执行这行；持久化后门。'
+    authority: ['CWE-829 包含不可信控制域的功能', 'Python 官方文档 site 模块：.pth 中以 import 开头的行会被执行', 'MITRE ATT&CK T1546 事件触发执行']
+    is_script: true
+    exploit_sensitive: true
+    disposition: 必须删除
+
+  - id: DP010
+    name: Mercurial / SVN 配置里的钩子
+    languages: [toml, txt, any]
+    pattern: '(^\s*\[hooks\]|^\s*(pre|post)-?(commit|update|push|pull|changegroup|txnclose)[\w.-]*\s*=\s*\S+|^\s*\[svn\]|hooks/(pre|post)-(commit|revprop-change|lock|unlock))'
+    severity: 高
+    literal: '[hooks] precommit = 某命令（钩子段 提交前 = 命令）：Mercurial/SVN 在版本控制操作时自动执行的命令'
+    plain: '和 .git/hooks 一样：每次提交、拉取时自动跑。跳过 .hg / .svn 目录不审，就看不到它。'
+    consequence: '持久化；每次版本控制操作触发。'
+    authority: ['MITRE ATT&CK T1546', 'CWE-506']
+    is_script: true
+    exploit_sensitive: false
+
   - id: DP008
     name: Git 子模块 / 外部仓库引用
     languages: [any]
