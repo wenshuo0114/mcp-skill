@@ -274,6 +274,7 @@ _USER_LEVEL_CANDIDATES = (
     "~/AppData/Roaming/npm", "~/AppData/Local/Programs/cursor", "~/.cursor-server",
 )
 _OPT_KEYWORDS = ("cursor", "agent", "vscode", "code", "codex", "claude", "gemini", "copilot", "mcp", "skill")
+_OPT_ROOTS = ("/opt", "/usr/local/lib", "/usr/lib", "C:/Program Files", "C:/Program Files (x86)")
 
 
 def user_level_config_paths(extra: list[str] | None = None) -> list[dict]:
@@ -293,7 +294,7 @@ def user_level_config_paths(extra: list[str] | None = None) -> list[dict]:
 
     for c in _USER_LEVEL_CANDIDATES:
         add(Path(c), "用户级白名单")
-    for opt_root in (Path("/opt"), Path("/usr/local/lib"), Path("/usr/lib")):
+    for opt_root in (Path(r) for r in _OPT_ROOTS):
         if opt_root.is_dir():
             try:
                 for child in opt_root.iterdir():
