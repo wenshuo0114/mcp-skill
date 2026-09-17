@@ -148,11 +148,25 @@ def test_scope_whole_disk_requires_confirm_and_skips_other_users(isolated_dirs, 
     monkeypatch.setattr(s.rc, "other_user_homes", lambda: [other])
     monkeypatch.setattr(s.rc, "_PSEUDO_FS", (str(fake_disk / "proc"),))
 
-    denied = s.review_scope("整盘")
+    # 第一道：真实性反问（先问用户核对，而不是先甩环境）
+    ask = s.review_scope("整盘")
+    assert ask["需要核对真实性"] is True
+    assert any("这台机器是你的吗" in q for q in ask["请你核对"])
+    assert ask["确认词"] == "✅ 这台机器是我的，我有权限，继续"
+    assert any("宿主真实性" in x for x in ask["我查不出的"]), "必须如实说宿主真实性无法自证"
+    assert ask["扫描根可达性"][0]["路径"] == str(fake_disk)
+    OWNER = "✅ 这台机器是我的，我有权限，继续"
+
+    # 第二道：整盘授权词
+    denied = s.review_scope("整盘", owner_confirm=OWNER)
     assert denied["需要授权"] is True and "✅ 授权只读扫描整盘" in denied["如何授权"]
     assert str(other) in denied["其他用户目录"]
 
-    r = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘")
+    r = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘", owner_confirm=OWNER)
+    assert "位置判断" in r["环境来源"] and "查不出的" in r["环境来源"]
+    text = Path(r["报告"]["报告路径"]).read_text(encoding="utf-8")
+    assert "## 环境来源（只是信号，不是核实结论）" in text and "systemd-detect-virt" in text
+    assert "已核实" not in text.replace("不是核实结论", "")
     listed = Path(r["范围"]["文件清单文件"]).read_text().splitlines()
     assert str(me / "proj" / "a.py") in listed
     assert str(other / "secret.py") not in listed, "默认不进其他用户目录"
@@ -162,9 +176,9 @@ def test_scope_whole_disk_requires_confirm_and_skips_other_users(isolated_dirs, 
     assert Path(r["报告"]["报告路径"]).name.startswith("整盘-")
 
     # 含其他用户目录：确认词不同，且要明说
-    wrong = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘", include_other_users=True)
+    wrong = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘", include_other_users=True, owner_confirm=OWNER)
     assert wrong["需要授权"] is True
-    r2 = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘，含其他用户目录", include_other_users=True)
+    r2 = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘，含其他用户目录", include_other_users=True, owner_confirm=OWNER)
     listed2 = Path(r2["范围"]["文件清单文件"]).read_text().splitlines()
     assert str(other / "secret.py") in listed2 and any("管理职责" in n for n in r2["说明"])
     # 清单在状态目录，不在被审位置
