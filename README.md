@@ -55,22 +55,22 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 | 工具 | 只读 | 作用 |
 |---|---|---|
 | `review_open(path, strict)` | 是 | 进入文件夹：识别仓库、清点实际文件、标出三组不可信、列出密钥文件并告知、判断大项目、检测换仓库并自动换报告。`strict=True` 不跳过任何目录 |
-| `review_scan(path, offset, limit)` | 是 | 分批逐行扫描，返回：文件详细路径、文件名、行号、代码、中文直译、白话、后果、级别、处置、权威依据 |
+| `review_scan(path, offset, limit)` | 是 | 分批逐行扫描。**offset/limit 是文件序号**（不是发现条数）；重扫同一文件会替换该文件旧发现，避免改行后累计数字对不上 |
 | `review_read(file, start, end, confirm)` | 是 | 读指定行段，内容带 `untrusted_content` 信封。密钥文件需确认（编号 / 关键字 / 原话均可命中选项 1）；读了也只显示变量名，值一律隐去 |
 | `review_references_of(symbol)` | 是 | 找一个符号 / 文件名 / 地址在仓库内的全部引用位置，供删除高风险项时连根处置、验证不可再利用 |
 | `review_file_metadata(file)` | 是 | 创建 / 修改 / 首次提交 / 最后提交日期、sha256、与审查时是否一致 |
 | `review_external_paths()` | 是 | 找指向其他仓库 / 路径变量 / git 地址的引用，返回必须转达的三选一 |
-| `review_scope(mode, path, strict, confirm, include_other_users, max_files, owner_confirm, challenge_ok)` | 是 | **审查范围四选一**：`文件` / `文件夹` / `整仓` / `整盘`。整盘三道门：真实性反问 → 管理员挑战码（证控制权不证所有权）→ 整盘授权；确认均支持编号/关键字/原话；默认跳过其他用户家目录；只跳 `/proc /sys /dev /run`，不跟符号链接，无权限目录如实报数 |
-| `review_explain_paths(paths, limit)` | 是 | 解释路径"在哪台机器、什么地方、怎么到"：Git 仓库副本（远程在 GitHub/GitLab/Gitee/…）、部署到 Cloudflare/Vercel 等的网页、VPS 系统目录、你的/他人用户目录、WSL 下的 Windows 盘、外部挂载、机器本身是虚拟机/容器；文件名中文含义；只给现有权限内的到达方法。判断不了就写判断不了 |
-| `review_persistence_inventory(scan, max_files_per_location)` | 是 | 按 OS 列已知持久化位置（cron、systemd/launchd、启动文件夹、shell 启动脚本、`ld.so.preload`、浏览器配置与企业策略、`authorized_keys`、`hosts`…）：存在/可达/文件数，逐行扫描。**只看文件**，运行态附官方命令让你自己跑；附「凭据轮换根治法」 |
-| `review_plan_neutralization(finding_id, reply)` | 是 | 无害化（钉）提案：清原文 + 空值 + 只读中文注释「已无害化…」；整文件即载荷时提案删整文件；必须修复给重写要点（方向不给代码）；用户回答由工具按编号/关键字判定。**只算不写** |
-| `review_verify_neutralized(finding_id, expected_sha)` | 是 | 无害化写入后核对：原规则不再命中、无零宽/双向控制字符、注释在位、未留可复原提示、sha256 一致（整文件删除传 `expected_sha=已删除`） |
-| `review_user_level_configs(extra_paths, offset, limit)` | 是 | 常见位置快捷方式：`~/.cursor` `~/.claude` `~/.codex` `~/.gemini` `~/.vscode` `/opt/*` 等（含 Windows 路径），独立报告。不是范围上限 |
-| `review_secrets_inventory(include_user_level)` | 是 | 密钥 / 私钥 / 凭证 / 环境变量清单：路径、行号、变量名、日期、git 跟踪、引用次数、停用判断。**不报值** |
-| `report_set_header` / `report_write_decision` / `report_write_fix` / `report_external_choice` / `report_path` | 写报告 | 报告头部、用户决定、修复记录（前后 diff，必须带回滚点名）、外部引用选择、报告路径 |
-| `review_queue_add` / `review_queue_list` / `review_queue_next` | 写状态 | 计划审查列表 |
-| `rollback_create(files, name, note, purpose)` / `rollback_list()` | 写备份 | **普通修复**前备份。`purpose` 含"无害化/恶意"会被拒绝：恶意内容不建备份 |
-| `rollback_restore(name, confirm)` | **写仓库** | 点名恢复；必须 `confirm="用户已授权恢复 <名>"` |
+| `review_scope(...)` | 是 | 范围四选一：`文件` / `文件夹` / `整仓` / `整盘`。整盘三道门见下文；确认支持编号/关键字/原话 |
+| `review_explain_paths(paths, limit)` | 是 | 解释路径在哪台机器、什么地方、怎么到（现有权限内）；判断不了就写判断不了 |
+| `review_persistence_inventory(...)` | 是 | 按 OS 列已知持久化位置并扫描；只看文件；附官方运行态命令与凭据轮换根治法 |
+| `review_plan_neutralization(finding_id, reply)` | 是 | 无害化提案（只算不写）；整文件载荷可提案删除；用户回答由工具判定 |
+| `review_verify_neutralized(finding_id, expected_sha)` | 是 | 无害化后核对；整文件删除传 `expected_sha=已删除` |
+| `review_user_level_configs(...)` | 是 | 常见 AI/编辑器配置目录快捷方式；不是范围上限 |
+| `review_secrets_inventory(...)` | 是 | 密钥清单：只报路径/变量名/日期/git/引用；**不报值** |
+| `report_set_header` 等 | 写报告 | 头部、决定、修复记录、外部选择、报告路径 |
+| `review_queue_add` / `list` / `next` | 写状态 | 计划审查列表 |
+| `rollback_create` / `rollback_list` | 写备份 | 普通修复前备份；无害化/恶意用途拒绝 |
+| `rollback_restore(name, confirm)` | **写仓库** | 点名恢复；确认支持编号/关键字/原话 |
 
 "写"的都写在被审查仓库**之外**；唯一会改仓库内文件的是 `rollback_restore`，且要确认词。没有任何执行命令的工具。无害化的实际写入由助手用普通编辑工具在你逐文件确认后完成，随后必须 `review_verify_neutralized`。
 
@@ -166,7 +166,11 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 
 ## 审查器审自己：如实说
 
-对本仓库自己跑一遍（严格模式）会得到 200 条左右命中。原因：规则库 yaml 里写着它要找的模式；测试样例里故意放了假密钥和危险写法；技能文档里**描述**了"curl | sh""忽略之前指令"这类话。审查器不区分"提到"和"实际执行"，宁可多报，由人判断。这符合"不脑补、不隐瞒"，所以不为了自己好看放宽规则。
+对本仓库自己跑一遍（严格模式）会得到约 200+ 条命中。原因：规则库 yaml 里写着它要找的模式；测试样例里故意放了假密钥和危险写法；技能文档里**描述**了"curl | sh""忽略之前指令"这类话。审查器不区分"提到"和"实际执行"，宁可多报，由人判断。这符合"不脑补、不隐瞒"，所以不为了自己好看放宽规则。
+
+`review_scan` 的 `累计摘要` 以报告里当前发现清单为准；同一文件重扫时会先清掉该文件旧行号再写入，避免改文档后旧命中残留导致「本批相加 ≠ 累计」。助手分页时必须用返回的 `下一个offset`（文件序号），不能用发现条数去加。
+
+`review_scan` 的 `累计摘要` 以报告里当前发现清单为准；同一文件重扫时会先清掉该文件旧行号再写入，避免改文档后旧命中残留导致「本批相加 ≠ 累计」。助手分页时必须用返回的 `下一个offset`（文件序号），不能用发现条数去加。
 
 新模块的自审命中如实列出：`persistence.py` 命中 IN003/IN004/IN005/IN010/IN012/IN013/IN014/PR002 共 12 处——它是"持久化位置字典"，路径字串本身（`/etc/ld.so.preload`、`/etc/cron.d`、`~/.ssh/authorized_keys`、浏览器策略目录…）就是规则要找的模式；该文件只有 `Path(...)` 构造和字串常量，没有任何写入或执行。`path_kind.py` 第 38–40 行命中 PR002，同理是 `.aws` `.kube` `.docker` 的中文解释字典。`environment.py` `neutralize.py` 零命中。`docs/漏洞上报入门.md` 命中 RF003（8 条外链，都是厂商上报渠道）和 RX001（表格里**提到**"`curl | sh`"这个类型名）；`docs/路径类型入门.md` 命中 RF001/DP006/PR002/IN012（讲解 `~/.ssh`、`/etc/ld.so.preload` 是什么）。
 

@@ -86,15 +86,31 @@ class Report:
                 return
         reviews.append(entry)
 
-    def add_findings(self, findings: list[dict]) -> list[int]:
+    def add_findings(self, findings: list[dict], *, replace_files: set[str] | None = None) -> list[int]:
+        """写入发现。若给出 replace_files，先删掉这些文件路径下的旧发现再写入——
+        同一文件重扫时行号会变，不删旧的会导致累计摘要里留下已不存在的命中（数字对不上）。
+        同一 (路径, 行号, 规则ID) 再次出现时保留原发现编号与已有用户决定。"""
+        def _norm(p: str) -> str:
+            try:
+                return str(Path(p).expanduser().resolve())
+            except OSError:
+                return str(p)
+
+        if replace_files:
+            replace_norm = {_norm(p) for p in replace_files}
+            self.data["发现"] = [
+                f for f in self.data["发现"] if _norm(f["文件详细路径"]) not in replace_norm
+            ]
         ids: list[int] = []
         existing = {(f["文件详细路径"], f["行号"], f["规则ID"]): f for f in self.data["发现"]}
+        next_num = max((f["发现编号"] for f in self.data["发现"]), default=0) + 1
         for f in findings:
             key = (f["文件详细路径"], f["行号"], f["规则ID"])
             if key in existing:
                 ids.append(existing[key]["发现编号"])
                 continue
-            num = len(self.data["发现"]) + 1
+            num = next_num
+            next_num += 1
             rec = {"发现编号": num, "记录时间": now_iso(), "用户决定": None, "建议处理": None,
                    "计划": None, **f}
             self.data["发现"].append(rec)

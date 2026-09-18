@@ -322,6 +322,25 @@ def test_secrets_inventory_reports_paths_not_values(isolated_dirs, risky_repo: P
     assert all(Path(e["文件详细路径"]).is_absolute() for e in entries)
 
 
+def test_rescan_replaces_stale_findings_for_same_file(isolated_dirs, risky_repo: Path):
+    """改文件后重扫：旧行号命中必须从累计里消失，本批条数与累计一致。"""
+    s = isolated_dirs["server"]
+    s.review_open(str(risky_repo))
+    first = s.review_scan(limit=500)
+    assert first["累计摘要"]["发现总数"] == len(first["发现"])
+    app = risky_repo / "src" / "app.py"
+    original = app.read_text(encoding="utf-8")
+    app.write_text("\n\n\n" + original, encoding="utf-8")
+    try:
+        second = s.review_scan(limit=500)
+        assert second["累计摘要"]["发现总数"] == len(second["发现"])
+        curl_hits = [f for f in second["发现"] if f["文件名"] == "app.py" and f["规则ID"] == "RX001"]
+        assert curl_hits, "改完后仍应能扫到 RX001"
+        assert all(f["行号"] >= 4 for f in curl_hits)
+    finally:
+        app.write_text(original, encoding="utf-8")
+
+
 def test_user_level_configs_whitelist_only(isolated_dirs, risky_repo: Path, tmp_path: Path, monkeypatch):
     s = isolated_dirs["server"]
     from servers.file_reviewer import repo_context as rc
