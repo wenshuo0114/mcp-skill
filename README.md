@@ -62,7 +62,7 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 | `review_external_paths()` | 是 | 找指向其他仓库 / 路径变量 / git 地址的引用，返回必须转达的三选一 |
 | `review_scope(mode, path, strict, confirm, include_other_users, max_files, owner_confirm, challenge_ok)` | 是 | **审查范围四选一**：`文件` / `文件夹` / `整仓` / `整盘`，任意位置、不限白名单。整盘三道门：真实性反问（`owner_confirm`）→ 管理员挑战码（证控制权不证所有权，`challenge_ok`）→ 整盘授权（`confirm`）；确认均支持编号/关键字/原话；默认跳过其他用户家目录（包含需另选选项 2）；只跳 `/proc /sys /dev /run`，不跟符号链接，无权限目录如实报数 |
 | `review_explain_paths(paths, limit)` | 是 | 解释路径"在哪台机器、什么地方、怎么到"：Git 仓库副本（远程在 GitHub/GitLab/Gitee/Azure DevOps/Codeup/CODING/…）、部署到 Cloudflare/Vercel/Netlify 等的网页、VPS 系统目录、你的/他人用户目录、WSL 下的 Windows 盘、外部挂载、机器本身是虚拟机/容器；文件名中文含义；只给现有权限内的到达方法。判断不了就写判断不了 |
-| `review_persistence_inventory(scan, max_files_per_location)` | 是 | 按 OS 列已知持久化位置（cron、systemd/launchd、启动文件夹、shell 启动脚本、`ld.so.preload`、浏览器配置与企业策略、`authorized_keys`、`hosts`…）：存在/可达/文件数，逐行扫描。**只看文件**，运行态附官方命令让你自己跑；附「凭据轮换根治法」 |
+| `review_persistence_inventory(scan, max_files_per_location)` | 是 | 按 OS 列已知持久化位置（cron、systemd/launchd、启动文件夹、shell 启动脚本、`ld.so.preload`、浏览器配置与企业策略、`authorized_keys`、`hosts`…）：**用途是让你看这些位置还残留没有文件（害人害己的东西还在不在）**；存在/可达/文件数，逐行扫描；路径可再用 `review_explain_paths` 用人话解释。只看文件，运行态附官方命令让你自己跑；附凭据轮换说明 |
 | `review_plan_neutralization(finding_id, reply)` | 是 | 无害化（钉）提案：清原文 + 空值 + 只读中文注释「已无害化，风险：X，不提供复现」的样子与 diff；严重级/必须删除/密钥原文不回显；能否修复、是否需要重写（只给重写要点不给代码）、隐藏字符检查；整文件即载荷时可提案删整文件；用户回答（`reply`）由工具按编号/关键字判定。**只算不写** |
 | `review_verify_neutralized(finding_id, expected_sha)` | 是 | 无害化写入后核对：原规则不再命中、无零宽/双向控制字符、注释在位、未留可复原提示、sha256 一致（整文件删除传 `expected_sha=已删除`） |
 | `review_user_level_configs(extra_paths, offset, limit)` | 是 | 常见位置快捷方式：`~/.cursor` `~/.claude` `~/.codex` `~/.gemini` `~/.vscode` `/opt/*` 等（含 Windows 路径），独立报告。不是范围上限 |
@@ -72,7 +72,7 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 | `rollback_create(files, name, note, purpose)` / `rollback_list()` | 写备份 | **普通修复**前备份。`purpose` 含"无害化/恶意"会被拒绝：恶意内容不建备份 |
 | `rollback_restore(name, confirm)` | **写仓库** | 点名恢复；确认支持编号/关键字/原话（例如 `用户已授权恢复 <名>`） |
 
-"写"的都写在被审查仓库**之外**；唯一会改仓库内文件的是 `rollback_restore`，且要确认词。没有任何执行命令的工具。无害化的实际写入由助手用普通编辑工具在你逐文件确认后完成，随后必须 `review_verify_neutralized`。
+"写"报告/状态/回滚点时，写在被审查仓库**之外**（避免审查记录塞进你的网站目录）；**修好的干净网站代码仍留在你的项目里**。唯一会改仓库内文件的工具是 `rollback_restore`（且要确认词）。没有任何执行命令的工具。无害化的实际写入由助手在你逐文件确认后完成，随后必须 `review_verify_neutralized`。有害原文不备份；修好的合法代码要保留。
 
 ## 环境真实性：只报信号，不谎称核实
 
@@ -85,24 +85,26 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 
 权限边界：只在你现有读权限内工作。读不到（无权限、不存在、属于其他用户）就停并说原因，不提权、不绕过、不建议 `sudo`。要求提权口令、绕过方法、进别人的机器：拒绝。
 
-## 钉（无害化）：不是回滚点，不留备份
+## 钉（无害化）：清掉有害的，修好的网站留下来
 
-对恶意/可利用项，"钉"= 就地清除原文、写空值、加只读中文注释「已无害化，风险：X，不提供复现」。**不建回滚备份**——备份等于留着它被还原再利用。
+对恶意/可利用项（含：别人私加到你网站里的采集插件、不明脚本）：就地清除原文，加只读中文注释「已无害化，风险：X，不提供复现」.**有害原文不建备份**（怕被还原再利用）。
 
-整文件即载荷（`.pth` / 服务单元 / 钩子，或实质行几乎全命中）→ 提案删整文件，不留空壳；核对时传 `expected_sha=已删除`。
+**「重写」= 去掉私加物，恢复你网站正常功能。** 不给采集/劫持的复现方法，不给「怎么再加回去」的步骤。UI 颜色/样式参考只指外观，与有害逻辑无关。
 
-流程（一步一行，避免被截断）：
+**持久化位置清单**：用来看你机器/环境上这些位置**还残留没有文件**（害人害己的东西还在不在）；路径会用人话解释，不删字段糊弄。
 
-1. `review_plan_neutralization` 出提案（只算不写；高风险原文不回显；必须修复只给重写要点，不给代码）
+流程（一步一行）：
+
+1. `review_plan_neutralization` 出提案（只算不写；高风险原文不回显；不给复现）
 2. 你回编号或关键字授权
-3. 助手只改这一处（或删这一整个文件）
+3. 助手只改这一处（或删这一整个文件）；**修好的干净代码留在项目里**
 4. `review_verify_neutralized` 核对
 5. `review_references_of` 查引用，逐个同样处理
-6. `report_write_fix`：`rollback_point` 填 `无害化：不留备份`，并带上 `finding_id`
+6. `report_write_fix`：`rollback_point` 填 `无害化：不留备份`，并带上 `finding_id`（这里的「不留备份」= 不留有害原文；不是把修好的网站扔掉）
 
-你说"不修改、不删除"：不动，只把不动的后果写进报告。机器已售出 / VPS 登不上 / 目录属于别人：**不回去清**，走「凭据轮换根治法」——换掉它能拿到的一切凭据、通过服务商控制台重装，残留就成了没用的字节。
+你说"不修改、不删除"：不动，只把不动的后果写进报告。机器已售出 / VPS 登不上 / 目录属于别人：**不回去清**，走凭据轮换与服务商重装。
 
-问"漏洞怎么用"：已贴代码 → 写成不可达 `# 明文告知：无法协助此内容`；口头追问 → `# 不可操作`。这和无害化注释是两个场景，措辞分开。
+问"漏洞怎么用 / 怎么复现"：已贴代码 → `# 明文告知：无法协助此内容`；口头追问 → `# 不可操作`。
 
 ## 教学文档
 
