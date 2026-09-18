@@ -489,7 +489,10 @@ def review_scan(path: str = "", offset: int = 0, limit: int = 50) -> dict[str, A
         if fs:
             metas.append(rc.file_metadata(f, root))
     report = _report()
-    nums = report.add_findings([f.to_dict() for f in findings])
+    batch_paths = {str(f.resolve()) for f in batch}
+    # 也兼容相对/未 resolve 的旧记录
+    batch_paths |= {str(f) for f in batch}
+    nums = report.add_findings([f.to_dict() for f in findings], replace_files=batch_paths)
     for m in metas:
         report.upsert_review({**m, "一致性": "审查时记录"})
     summary = sc.summarize_findings(findings)

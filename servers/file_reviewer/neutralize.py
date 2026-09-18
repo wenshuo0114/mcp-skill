@@ -33,20 +33,21 @@ _EMPTY_VALUE = {"python": "None", "javascript": "null", "typescript": "null", "s
                 "yaml": "null", "txt": '""', "dockerfile": '""', "unknown": '""'}
 
 
-# 按类别给"重写要点"：保留什么、去掉什么、改成什么。只讲方向，不给可复现代码。
+# 按类别给"恢复正常功能"的说明：去掉私加有害部分后，网站/程序该怎么保持正常。
+# 禁止写成利用步骤或「怎么再加回去」；用户做网站时的目标是清采集/清私加插件。
 REWRITE_HINTS = {
-    "remote_exec": "去掉远程拉取执行；改为锁定版本的依赖（写进 requirements/package.json 并锁哈希），或把需要的文件放进仓库审过再用。",
-    "dangerous_exec": "去掉 eval/exec/shell=True 一类；改为参数化 API（subprocess 传列表、json.loads 代替 eval、yaml.safe_load）。",
-    "secrets": "值不进仓库：改为从环境变量或密钥管理器读取；旧值视为已泄露，立即作废并换新。",
-    "dependency": "锁定版本号；去掉 git/URL 依赖、postinstall/自定义安装脚本；.pth/钩子类直接删除。",
-    "network": "开启证书校验；http 改 https；CORS 改白名单；去掉硬编码公网 IP，改为配置项。",
-    "intrusion": "应用代码里不应有持久化/开端口/改系统配置的逻辑。确需服务化时，用系统包管理器安装、由用户可见地配置，不由代码自己写。",
-    "privacy": "不读用户凭据目录、浏览器数据、剪贴板、摄像头；需要凭据由用户显式传入。",
-    "web_helper": "innerHTML 改 textContent 或经白名单消毒；外链加 rel=noopener；第三方脚本加 SRI；令牌不放 localStorage。",
-    "instruction_injection": "删除这段文字。它没有合规改法。",
-    "propagation": "删除。自动推送/群发/自复制没有合规改法。",
-    "obfuscation": "还原为明文可读代码并删除解码执行；还原不了就按恶意处置。",
-    "reference": "修正引用为实际存在的路径，或删除该引用。",
+    "remote_exec": "去掉远程拉取执行；需要的库写进正式依赖清单并由你审过再用。",
+    "dangerous_exec": "去掉 eval/exec/任意命令执行；改用安全的参数化接口（如 json.loads、yaml.safe_load）。",
+    "secrets": "密钥不进仓库：改为环境变量或密钥柜；旧值当作已泄露，作废并换新。",
+    "dependency": "锁定版本；去掉来历不明的安装脚本与钩子。",
+    "network": "开证书校验；明文改加密；跨域改白名单；地址改为配置项而不是写死。",
+    "intrusion": "网站/应用代码里不应自己改系统、开后门端口、写启动项。需要服务时由你显式安装配置。",
+    "privacy": "不读用户凭据目录、浏览器数据、剪贴板、摄像头；需要的信息由用户主动提供。",
+    "web_helper": "去掉私加的采集/不明外链脚本；页面展示用安全写法（如 textContent）；你自己的正常页面功能保留。",
+    "instruction_injection": "删除这段指挥文字。没有合规改法。",
+    "propagation": "删除。自动扩散没有合规改法。",
+    "obfuscation": "还原为可读代码并去掉解码执行；还原不了按恶意清除。",
+    "reference": "改成真实存在的路径，或删掉这条引用。",
 }
 
 _COMMENT_LINE = re.compile(r"^\s*(#|//|/\*|\*|<!--|;|--)")
@@ -147,14 +148,15 @@ def propose(file: Path, line_no: int, rule: sc.Rule, *, findings_in_file: int = 
 
     total = max(1, len(lines))
     heavy = findings_in_file >= 5 or (findings_in_file / total) > 0.3 or (total <= 10 and rule.is_script)
-    hint = REWRITE_HINTS.get(rule.category_id, "按权威依据改写；保留功能、去掉风险。")
+    hint = REWRITE_HINTS.get(rule.category_id, "去掉私加有害部分，保留你的正常功能；不提供复现。")
     if rule.disposition == "必须删除":
         fixable = "不可修复，只能清除：这类内容没有“保留功能去掉风险”的写法。"
         rewrite_points = None
     elif rule.disposition == "必须修复":
-        fixable = "可修复：保留功能、去掉依赖性/持久性/指向性。无害化只是止血，之后要按“重写要点”补回功能。"
-        rewrite_points = {"保留": "这一行原本要完成的功能（请你确认它是什么）", "去掉": rule.name, "改成": hint,
-                          "依据": rule.authority, "说明": "重写由助手在你授权后做，做完同样过 review_verify_neutralized；这里只给方向，不给可复现代码。"}
+        fixable = "可修复：去掉私加有害部分，保留你的正常功能。无害化是清害，修好的代码留在项目里。"
+        rewrite_points = {"保留": "这一行原本要完成的正常功能（请你确认，例如页面展示、下单、登录）",
+                          "去掉": rule.name, "改成": hint, "依据": rule.authority,
+                          "说明": "只恢复正常网站/程序功能；不提供采集或插件植入的复现；写入后过 review_verify_neutralized。"}
     else:
         fixable = "建议修复：风险由你判断。无害化后功能会缺失，请确认可接受。"
         rewrite_points = {"改成": hint, "依据": rule.authority}
@@ -167,8 +169,8 @@ def propose(file: Path, line_no: int, rule: sc.Rule, *, findings_in_file: int = 
         "无害化后": new_block if new_block else "（删除该行）",
         "差异预览": "".join(diff),
         "是否需要重写": heavy,
-        "重写说明": ("改动大：这个文件里可疑内容占比高或本身就是一段脚本，逐行无害化会留下一个残缺的壳。建议先告知用户，"
-                 "把重写方案放到单独会话/子代理里产出，再回来执行。" if heavy else "改动小：单行无害化即可。"),
+        "重写说明": ("改动大：可疑内容占比高或像整段私加脚本。"
+                 "先说明要恢复哪些正常功能、去掉哪类私加物（不给复现），你点头后再做。" if heavy else "改动小：清掉这一处即可。"),
         "能否修复": fixable,
         "重写要点": rewrite_points,
         "备注": notes,
