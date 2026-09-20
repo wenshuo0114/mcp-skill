@@ -113,7 +113,7 @@ Windows：`command` 用 `${workspaceFolder}/.venv/Scripts/python.exe`。要在�
 
 ## 教学文档
 
-- `docs/挂载到MCP入门.md`：怎么把本审查器挂进 Cursor（安装依赖、mcp.json 方式 A/B、挂技能、严格模式、本机审任意文件夹、常见翻车点）。
+- `docs/挂载到MCP入门.md`：怎么把本审查器挂进 Cursor（**pip 与 python3 必须同一解释器**、venv 推荐、mcp.json 方式 A/B、挂技能、严格模式、本机审任意文件夹、常见翻车点）。
 - `docs/路径类型入门.md`：`~/.grok`、`/home/x/.codex`、`C:\Users\x\.vscode` 这类路径在哪台机器、什么地方、怎么打开；虚拟机/WSL/容器/VPS/云仓库怎么分。
 - `docs/漏洞上报入门.md`：问题在谁的代码里、协调披露 90 天流程、`SECURITY.md` / GitHub 私密 advisory / MSRC / CNVD 渠道、表单归类与 CWE 对照、中文用户的编码与语言坑。只讲流程，不含复现。
 

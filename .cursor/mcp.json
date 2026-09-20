@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "file-reviewer": {
-      "command": "python3",
+      "command": "${workspaceFolder}/.venv/bin/python",
       "args": ["-m", "servers.file_reviewer.server"],
       "cwd": "${workspaceFolder}",
       "env": {
