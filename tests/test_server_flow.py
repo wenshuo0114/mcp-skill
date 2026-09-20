@@ -183,23 +183,22 @@ def test_scope_whole_disk_requires_confirm_and_skips_other_users(isolated_dirs, 
     # 用户自己（模拟）以管理员身份写入正确码
     chal_file.write_text(need["挑战码"] + "\n", encoding="utf-8")
 
-    # 第三道：整盘授权 —— 同时对上“含/不含其他用户”两项时缩小再问
+    # 第三道：整盘授权 —— 只有「授权（永不进别人家）」或「不扫」
     denied = s.review_scope("整盘", owner_confirm=OWNER)
     assert denied["需要授权"] is True and "控制权" in denied["管理员挑战"]
-    assert str(other) in denied["其他用户目录"]
-    amb = s.review_scope("整盘", owner_confirm=OWNER, confirm="授权扫整盘")
-    assert amb["需要授权"] is True and [o["编号"] for o in amb["请选"]["选项"]] == [1, 2], "对上两个就缩小再问，不猜"
-    assert "缩小" in amb["请选"]["标题"]
+    assert str(other) in denied["将跳过的其他用户目录"]
+    assert "没有「含其他用户」" in denied["说明"]
 
     r = s.review_scope("整盘", confirm="1", owner_confirm=OWNER)
     assert "位置判断" in r["环境来源"] and "查不出的" in r["环境来源"]
     assert any("控制权不是所有权" in n for n in r["说明"])
+    assert any("永不进入其他用户" in n for n in r["说明"])
     text = Path(r["报告"]["报告路径"]).read_text(encoding="utf-8")
     assert "## 环境来源（只是信号，不是核实结论）" in text and "systemd-detect-virt" in text
     assert "已核实" not in text.replace("不是核实结论", "")
     listed = Path(r["范围"]["文件清单文件"]).read_text().splitlines()
     assert str(me / "proj" / "a.py") in listed
-    assert str(other / "secret.py") not in listed, "默认不进其他用户目录"
+    assert str(other / "secret.py") not in listed, "永不进其他用户目录"
     assert str(fake_disk / "proc" / "cpuinfo") not in listed
     assert r["范围"]["跳过的其他用户目录"] == [str(other)]
     assert r["范围"]["跳过的伪文件系统"] == [str(fake_disk / "proc")]
@@ -209,17 +208,35 @@ def test_scope_whole_disk_requires_confirm_and_skips_other_users(isolated_dirs, 
     need2 = s.review_scope("整盘", owner_confirm=OWNER)
     assert need2["需要管理员挑战"] is True and need2["挑战码"] != need["挑战码"]
     chal_file.write_text(need2["挑战码"], encoding="utf-8")
-    # 含其他用户目录：用户选的选项说了算（参数只是提示）；选 1 即便参数说含也不含
-    r1 = s.review_scope("整盘", confirm="✅ 授权只读扫描整盘", include_other_users=True, owner_confirm=OWNER)
-    assert str(other / "secret.py") not in Path(r1["范围"]["文件清单文件"]).read_text().splitlines()
-    need3 = s.review_scope("整盘", owner_confirm=OWNER); chal_file.write_text(need3["挑战码"], encoding="utf-8")
-    r2 = s.review_scope("整盘", confirm="扫整盘，含其他用户", owner_confirm=OWNER)
-    listed2 = Path(r2["范围"]["文件清单文件"]).read_text().splitlines()
-    assert str(other / "secret.py") in listed2 and any("管理职责" in n for n in r2["说明"])
+    # include_other_users=True 硬拒绝，不开旁路
+    with pytest.raises(Exception) as ei:
+        s.review_scope("整盘", confirm="1", include_other_users=True, owner_confirm=OWNER)
+    assert "含其他用户" in str(ei.value) or "没有" in str(ei.value)
+    # 「含其他用户」话术命中「不扫」
+    stopped = s.review_scope("整盘", confirm="扫整盘，含其他用户", owner_confirm=OWNER)
+    assert stopped.get("已停止") is True
     # 清单在状态目录，不在被审位置
-    assert Path(r2["范围"]["文件清单文件"]).is_relative_to(isolated_dirs["state"])
+    assert Path(r["范围"]["文件清单文件"]).is_relative_to(isolated_dirs["state"])
     assert not any(p.suffix == ".txt" and "scopes" in str(p) for p in fake_disk.rglob("*"))
 
+
+def test_refuse_other_user_home_on_open_and_scope(isolated_dirs, tmp_path, monkeypatch):
+    """别人的家目录：review_open / review_scope 一律硬拒绝。"""
+    s = isolated_dirs["server"]
+    fake_home_root = tmp_path / "homes"
+    me = fake_home_root / "me"
+    other = fake_home_root / "other"
+    me.mkdir(parents=True); other.mkdir(parents=True)
+    (other / "secret.py").write_text("x=1\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(me))
+    monkeypatch.setattr(s.rc, "own_home", lambda: me.resolve())
+    monkeypatch.setattr(s.rc, "other_user_homes", lambda: [other.resolve()])
+    with pytest.raises(Exception) as ei:
+        s.review_open(str(other))
+    assert "其他用户" in str(ei.value)
+    with pytest.raises(Exception) as ei2:
+        s.review_scope("文件夹", path=str(other))
+    assert "其他用户" in str(ei2.value)
 
 def test_references_of_symbol(isolated_dirs, risky_repo: Path):
     s = isolated_dirs["server"]

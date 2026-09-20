@@ -341,7 +341,7 @@ def own_home() -> Path:
 
 
 def other_user_homes() -> list[Path]:
-    """本机上不属于当前用户的家目录。整盘扫描默认跳过它们：别人的目录是别人的隐私，需要单独确认。"""
+    """本机上不属于当前用户的家目录。一律不进：别人的目录是别人的隐私，本工具没有「含其他用户」入口。"""
     mine = own_home()
     out: list[Path] = []
     for parent in (Path("/home"), Path("/Users"), Path("C:/Users") if os.name == "nt" else None):
@@ -362,6 +362,33 @@ def other_user_homes() -> list[Path]:
     return sorted(out)
 
 
+def under_other_user_home(path: Path | str) -> Path | None:
+    """若 path 落在其他用户家目录下，返回那个家目录；否则 None。用于硬拒绝。"""
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except OSError:
+        return None
+    for home in other_user_homes():
+        try:
+            h = home.resolve()
+        except OSError:
+            h = home
+        if resolved == h or h in resolved.parents:
+            return h
+    return None
+
+
+def refuse_other_user_path(path: Path | str) -> None:
+    """硬规矩：不读别人的家目录，也不提供「授权后可读」的旁路。别人也读不了你的——那是操作系统权限；本工具额外拒绝主动去扫别人。"""
+    hit = under_other_user_home(path)
+    if hit is not None:
+        raise PermissionError(
+            f"拒绝：路径 {Path(path).expanduser().resolve()} 落在其他用户目录 {hit} 下。"
+            f"本审查器只读你自己的路径；不提供获取别人文件的入口，也不接受「含其他用户」之类授权。"
+            f"要审那份内容，只能由那个用户在自己的账号下自己打开审查器。"
+        )
+
+
 def _scopes_dir() -> Path:
     return STATE_DIR / "scopes"
 
@@ -369,11 +396,14 @@ def _scopes_dir() -> Path:
 def enumerate_scope(roots: list[Path], *, strict: bool = True, include_other_users: bool = False,
                     max_files: int = 0) -> dict:
     """遍历给定根，把实际存在的普通文件清单写到状态目录（不写进被审目录），返回统计。
-    只跳伪文件系统与（默认）其他用户家目录；不跟随符号链接（防环）；非普通文件（设备、管道、套接字）不读。"""
+    只跳伪文件系统与其他用户家目录（include_other_users 参数保留兼容，传入 True 也一律跳过、并在结果里标明已拒绝）；
+    不跟随符号链接（防环）；非普通文件（设备、管道、套接字）不读。"""
     from .scanner import DEFAULT_SKIP_DIRS, ALWAYS_SKIP_DIRS
     started = datetime.now(timezone.utc)
     skip_names = frozenset() if strict else DEFAULT_SKIP_DIRS
-    excluded_homes = {str(p) for p in other_user_homes()} if not include_other_users else set()
+    # 硬规矩：永远排除其他用户家目录。参数 True 也不开旁路。
+    refused_include = bool(include_other_users)
+    excluded_homes = {str(p) for p in other_user_homes()}
     pseudo_hit: list[str] = []
     homes_hit: list[str] = []
     denied = 0
@@ -440,6 +470,7 @@ def enumerate_scope(roots: list[Path], *, strict: bool = True, include_other_use
         "跳过的伪文件系统": sorted(set(pseudo_hit)), "跳过的其他用户目录": sorted(set(homes_hit)),
         "无权限跳过的目录数": denied, "非普通文件数(设备/管道/套接字/符号链接)": non_regular,
         "耗时秒": round(elapsed, 1),
+        "已拒绝含其他用户请求": refused_include,
     }
 
 

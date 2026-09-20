@@ -184,10 +184,12 @@ def review_open(path: str, strict: bool | None = None) -> dict[str, Any]:
     """进入一个文件夹开始只读审查。识别仓库、清点实际文件（不读 README 等文字介绍）、判断是否大项目、
     检测是否换了仓库（换了则自动切到新报告文件），返回报告路径。
     strict=True 为严格模式：不跳过 node_modules / .venv / dist / .next / target / 缓存等任何目录（默认跳过是性能取舍，不是安全判断）。
-    未传时看环境变量 MCP_SKILL_STRICT。"""
+    未传时看环境变量 MCP_SKILL_STRICT。
+    硬规矩：路径若落在其他用户家目录下，一律拒绝（不提供「授权后可读」旁路）。"""
     p = Path(path).expanduser().resolve()
     if not p.exists():
         raise FileNotFoundError(f"路径不存在：{p}")
+    rc.refuse_other_user_path(p)
     if strict is None:
         strict = sc.strict_mode_default()
     info = rc.identify_repo(p)
@@ -312,23 +314,25 @@ def review_user_level_configs(extra_paths: list[str] | None = None, offset: int 
 def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = "",
                  include_other_users: bool = False, max_files: int = 0, owner_confirm: str = "") -> dict[str, Any]:
     """选定审查范围，四选一由用户决定：mode = "文件" | "文件夹" | "整仓" | "整盘"。
-    - 文件 / 文件夹：path 指向任意位置，不限于当前仓库、不限于白名单。
-    - 整仓：path 所在 git 仓库的根，等同 review_open(strict=True) 并缓存文件清单。
-    - 整盘：Linux/macOS 从 / 起、Windows 所有盘符。三道门，每道都把用户的原话传进来（回编号 / 关键字 / 原话都能命中，
-      含否定词一律按停止；同时对上多个选项时工具会缩小范围再问）：
-      1) owner_confirm：真实性反问后用户的选择（选项 1「这台机器是我的，我有权限，继续」）；
-      2) 管理员挑战：工具发一次性随机码，用户自己以管理员身份把它写进系统目录（/etc 或 C:/Windows），工具只读核对——
-         证明的是“控制权”，不是“所有权”，报告里不会写“已核实所有者”；
-      3) confirm：整盘授权，选项 1 不含其他用户目录（默认）、选项 2 含（只在机器完全属于你或你有管理职责时）。
-      审查器只报它看到的信号，绝不宣称“已核实”。
-      只跳伪文件系统（/proc /sys /dev /run）；不跟随符号链接；设备、管道、套接字不读。
-    strict 默认 True：不跳过任何目录。max_files=0 不设上限。
-    文件清单写在状态目录（不写进被审位置），之后 review_scan / review_secrets_inventory / review_references_of 都在此范围内进行。"""
+    - 文件 / 文件夹 / 整仓：path 指向你自己的位置。若落在其他用户家目录 → 硬拒绝。
+    - 整盘：Linux/macOS 从 / 起、Windows 所有盘符。三道门：
+      1) owner_confirm：真实性反问；
+      2) 管理员挑战：证控制权不证所有权；
+      3) confirm：整盘授权（只扫、永不进其他用户家目录）。
+      只跳伪文件系统（/proc /sys /dev /run）；不跟随符号链接。
+    include_other_users 参数已废弃：传入 True 也会被拒绝/忽略，永远不进别人家目录。
+    strict 默认 True。max_files=0 不设上限。"""
     mode = mode.strip()
     if mode not in rc.SCOPE_MODES:
         raise ValueError(f"mode 必须是 {list(rc.SCOPE_MODES)} 之一，收到：{mode!r}")
     notes: list[str] = []
     env_info = envmod.detect_environment()
+    if include_other_users:
+        raise PermissionError(
+            "拒绝：本审查器没有「含其他用户目录」入口。"
+            "只读你自己的路径；别人的家目录永远不进。"
+            "请把 include_other_users 去掉或设为 False。"
+        )
     if mode == "整盘":
         state0 = rc.load_state()
         # 第一道：真实性反问 —— 用户回编号/关键字/原话都行；含否定词一律按“停”
@@ -363,36 +367,35 @@ def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = 
             return {"需要管理员挑战": True, "核对结果": vc,
                     "挑战码": issued["挑战码"], "请你在这台机器上以管理员身份执行": issued["请你在这台机器上以管理员身份执行"],
                     "如何继续": "按“原因”修正后再调用一次；过期就重新调用拿新码。不通过就不扫整盘，我不提供绕过方法。"}
-        # 第三道：整盘授权（含/不含其他用户目录由你选的选项决定，也可用 include_other_users 参数）
+        # 第三道：整盘授权 —— 只有「授权（永不进别人家）」或「不扫」；没有含其他用户
         disk_opts = cf.disk_options()
         dm = cf.match(confirm, disk_opts)
-        if not dm.命中 or dm.命中.值 is None:
-            if dm.命中 and dm.命中.值 is None:
+        if not dm.命中 or dm.命中.值 is not True:
+            if dm.命中 and dm.命中.值 is False:
                 return {"已停止": True, "说明": f"{dm.说明} 不扫整盘。", "请删除挑战文件": issued.get("核对后请删除")}
             return {
                 "需要授权": True,
                 "管理员挑战": "已通过（证明的是控制权，不是所有权）",
-                "说明": "整盘扫描会读取这台机器上你有权限读的所有普通文件（只读、不执行、不联网、不外传；密钥值一律隐去）。"
-                      "耗时可能很长；报告里会出现大量路径。",
-                "其他用户目录": f"这台机器上还有：{[str(x) for x in rc.other_user_homes()]}。默认跳过——别人的目录是别人的隐私；"
-                          "选 2 才包含，且只在这台机器完全属于你、或你对它有管理职责时。",
+                "说明": "整盘扫描会读取这台机器上你有权限读的普通文件（只读、不执行、不联网、不外传；密钥值一律隐去）。"
+                      "耗时可能很长；报告里会出现大量路径。"
+                      "其他用户家目录永远跳过——本工具没有「含其他用户」选项，也不接受这类授权。",
+                "将跳过的其他用户目录": [str(x) for x in rc.other_user_homes()],
                 "请选": cf.ask(disk_opts, dm if confirm else None, "请选一个（回编号或关键字都可以）"),
                 "如何继续": "把你的选择放在 confirm 里再调用。",
             }
-        include_other_users = bool(dm.命中.值)  # 用户选的选项说了算，参数只是提示
         notes.append(f"管理员挑战通过（文件 {vc['文件']}，证明的是控制权不是所有权）。核对完请删除：{issued.get('核对后请删除')}")
+        notes.append("硬规矩：永不进入其他用户家目录。")
         state0.pop("整盘挑战", None); rc.save_state(state0)
         roots = rc.disk_roots()
         name = f"整盘-{os.uname().nodename if hasattr(os, 'uname') else os.environ.get('COMPUTERNAME', 'host')}"
         root_str = str(roots[0])
-        if include_other_users:
-            notes.append("已按你的确认包含其他用户目录。请确保你对这台机器有管理职责。")
     else:
         if not path:
             raise ValueError(f"mode={mode} 需要 path")
         p = Path(path).expanduser().resolve()
         if not p.exists():
             raise FileNotFoundError(f"路径不存在：{p}")
+        rc.refuse_other_user_path(p)
         if mode == "文件":
             if not p.is_file():
                 raise ValueError(f"mode=文件 但 {p} 不是文件")
@@ -406,8 +409,9 @@ def review_scope(mode: str, path: str = "", strict: bool = True, confirm: str = 
             if not info.是否git仓库:
                 notes.append(f"{p} 不在 git 仓库内，按文件夹处理。")
             roots, name, root_str = [Path(info.仓库根目录)], info.仓库名, info.仓库根目录
+            rc.refuse_other_user_path(roots[0])
 
-    enum = rc.enumerate_scope(roots, strict=strict, include_other_users=include_other_users, max_files=max_files)
+    enum = rc.enumerate_scope(roots, strict=strict, include_other_users=False, max_files=max_files)
     state = rc.load_state()
     prev = state.get("当前仓库")
     state["当前仓库"] = {"仓库名": name, "仓库根目录": root_str, "严格模式": strict, "范围模式": mode,

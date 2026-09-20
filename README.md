@@ -65,7 +65,7 @@ Windows：`command` 用 `${workspaceFolder}/.venv/Scripts/python.exe`。要在�
 | `review_references_of(symbol)` | 是 | 找一个符号 / 文件名 / 地址在仓库内的全部引用位置，供删除高风险项时连根处置、验证不可再利用 |
 | `review_file_metadata(file)` | 是 | 创建 / 修改 / 首次提交 / 最后提交日期、sha256、与审查时是否一致 |
 | `review_external_paths()` | 是 | 找指向其他仓库 / 路径变量 / git 地址的引用，返回必须转达的三选一 |
-| `review_scope(mode, path, strict, confirm, include_other_users, max_files, owner_confirm, challenge_ok)` | 是 | **审查范围四选一**：`文件` / `文件夹` / `整仓` / `整盘`，任意位置、不限白名单。整盘三道门：真实性反问（`owner_confirm`）→ 管理员挑战码（证控制权不证所有权，`challenge_ok`）→ 整盘授权（`confirm`）；确认均支持编号/关键字/原话；默认跳过其他用户家目录（包含需另选选项 2）；只跳 `/proc /sys /dev /run`，不跟符号链接，无权限目录如实报数 |
+| `review_scope(mode, path, strict, confirm, include_other_users, max_files, owner_confirm, challenge_ok)` | 是 | **审查范围四选一**：`文件` / `文件夹` / `整仓` / `整盘`。落在其他用户家目录 → 硬拒绝。整盘三道门后只授权「永不进其他用户家」；`include_other_users=True` 已废弃并拒绝。只跳 `/proc /sys /dev /run`，不跟符号链接 |
 | `review_explain_paths(paths, limit)` | 是 | 解释路径"在哪台机器、什么地方、怎么到"：Git 仓库副本（远程在 GitHub/GitLab/Gitee/Azure DevOps/Codeup/CODING/…）、部署到 Cloudflare/Vercel/Netlify 等的网页、VPS 系统目录、你的/他人用户目录、WSL 下的 Windows 盘、外部挂载、机器本身是虚拟机/容器；文件名中文含义；只给现有权限内的到达方法。判断不了就写判断不了 |
 | `review_persistence_inventory(scan, max_files_per_location)` | 是 | 按 OS 列已知持久化位置（cron、systemd/launchd、启动文件夹、shell 启动脚本、`ld.so.preload`、浏览器配置与企业策略、`authorized_keys`、`hosts`…）：**用途是让你看这些位置还残留没有文件（害人害己的东西还在不在）**；存在/可达/文件数，逐行扫描；路径可再用 `review_explain_paths` 用人话解释。只看文件，运行态附官方命令让你自己跑；附凭据轮换说明 |
 | `review_plan_neutralization(finding_id, reply)` | 是 | 无害化（钉）提案：清原文 + 空值 + 只读中文注释「已无害化，风险：X，不提供复现」的样子与 diff；严重级/必须删除/密钥原文不回显；能否修复、是否需要重写（只给重写要点不给代码）、隐藏字符检查；整文件即载荷时可提案删整文件；用户回答（`reply`）由工具按编号/关键字判定。**只算不写** |
@@ -86,9 +86,10 @@ Windows：`command` 用 `${workspaceFolder}/.venv/Scripts/python.exe`。要在�
 整盘扫描走三道门，每道都返回带编号的选项（回 `1` / 关键字 / 原话均可；含否定词一律停；同时对上多个就缩小再问）：
 1. 真实性反问（这台机器是你的吗、有管理员权限吗、知道自己在虚拟机/容器里吗、整盘在虚拟机里 = 虚拟机的盘不是宿主的盘）。
 2. **管理员挑战码**：工具发一次性随机码，你自己以管理员身份写进 `/etc/...` 或 `C:\Windows\...`，工具只读核对——证的是控制权，**不能证明所有权**。
-3. 整盘授权（默认不含其他用户目录）。
+3. 整盘授权（**永不**进其他用户家目录；没有「含其他用户」选项）。
+4. 路径落在其他用户家目录、或传入 `include_other_users=True`：硬拒绝。
 
-权限边界：只在你现有读权限内工作。读不到（无权限、不存在、属于其他用户）就停并说原因，不提权、不绕过、不建议 `sudo`。要求提权口令、绕过方法、进别人的机器：拒绝。
+权限边界：只在你现有读权限内、且不进别人家目录。读不到就停并说原因，不提权、不绕过。要求进别人目录：拒绝。详见 [docs/隐私边界.md](docs/隐私边界.md)。
 
 ## 钉（无害化）：清掉有害的，修好的网站留下来
 
@@ -113,13 +114,14 @@ Windows：`command` 用 `${workspaceFolder}/.venv/Scripts/python.exe`。要在�
 
 ## 教学文档
 
-- `docs/挂载到MCP入门.md`：怎么把本审查器挂进 Cursor（**pip 与 python3 必须同一解释器**、venv 推荐、mcp.json 方式 A/B、挂技能、严格模式、本机审任意文件夹、常见翻车点）。
+- `docs/隐私边界.md`：只读你的、永不进别人家；mcp.json 每项「指向」什么；防启动夹带；别人跑审查器为什么读不到你。
+- `docs/挂载到MCP入门.md`：怎么把本审查器挂进 Cursor（venv、方式 A/B、严格模式、常见翻车点）。
 - `docs/路径类型入门.md`：`~/.grok`、`/home/x/.codex`、`C:\Users\x\.vscode` 这类路径在哪台机器、什么地方、怎么打开；虚拟机/WSL/容器/VPS/云仓库怎么分。
 - `docs/漏洞上报入门.md`：问题在谁的代码里、协调披露 90 天流程、`SECURITY.md` / GitHub 私密 advisory / MSRC / CNVD 渠道、表单归类与 CWE 对照、中文用户的编码与语言坑。只讲流程，不含复现。
 
 ## 审查范围：四选一，由你选
 
-`review_scope(mode, path)`：`文件`（任意一个文件）、`文件夹`（任意目录，不限于仓库或白名单）、`整仓`（所在 git 仓库根，严格模式）、`整盘`（`/` 或所有盘符）。整盘只跳内核伪文件系统 `/proc /sys /dev /run`，不跟随符号链接，设备/管道/套接字不读，无权限目录如实报数量。**默认跳过其他用户的家目录**——别人的目录是别人的隐私；要包含需选整盘授权选项 2，且只在这台机器完全属于你或你有管理职责时才做。文件清单写在状态目录，之后的扫描 / 凭据清单 / 引用查找都在清单内进行。本机实测：20 万个文件枚举约 6 秒。
+`review_scope(mode, path)`：`文件` / `文件夹` / `整仓` / `整盘`。整盘只跳 `/proc /sys /dev /run`，不跟随符号链接，无权限目录如实报数量。**其他用户家目录永远不进**（无「含其他用户」选项；`include_other_users` 传入 True 会拒绝）。详见 [docs/隐私边界.md](docs/隐私边界.md)。
 
 ## 跳过的目录：如实说
 
@@ -193,7 +195,7 @@ servers/file_reviewer/   MCP 服务器（scanner / repo_context / report / rollb
 skills/code-review/      审查流程技能（中文）
 skills/code-teaching/    代码直译教学技能（中文）
 rules/                   三条硬规矩
-docs/                    挂载到MCP入门、上传前自查清单、路径类型入门、漏洞上报入门
+docs/                    隐私边界、挂载到MCP入门、上传前自查清单、路径类型入门、漏洞上报入门
 tests/                   pytest
 ```
 

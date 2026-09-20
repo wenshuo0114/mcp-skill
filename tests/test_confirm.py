@@ -21,17 +21,18 @@ def test_owner_gate_no_match_lists_all():
     assert m.命中 is None and [o.编号 for o in m.需要再选] == [1, 2]
 
 
-def test_disk_gate_ambiguous_narrows_then_hits():
+def test_disk_gate_only_mine_or_stop():
     opts = cf.disk_options()
-    amb = cf.match("授权扫整盘", opts)
+    assert cf.match("1", opts).命中.值 is True
+    assert cf.match("✅ 授权只读扫描整盘", opts).命中.值 is True
+    assert cf.match("授权只读继续", opts).命中.值 is True
+    # 「含其他用户」/「别人的」一律当停：本工具没有读别人的路
+    assert cf.match("扫整盘含其他用户", opts).命中.值 is False
+    assert cf.match("别人的也要扫", opts).命中.值 is False
+    assert cf.match("别扫了", opts).命中.值 is False
+    assert cf.match("2", opts).命中.值 is False
+    amb = cf.match("嗯", opts)
     assert amb.命中 is None and [o.编号 for o in amb.需要再选] == [1, 2]
-    body = cf.ask(opts, amb, "x")
-    assert "缩小" in body["标题"] and [o["编号"] for o in body["选项"]] == [1, 2]
-    assert cf.match("2", opts).命中.值 is True
-    assert cf.match("扫整盘含其他用户", opts).命中.编号 == 2
-    assert cf.match("不含别人的", opts).命中.编号 == 1
-    assert cf.match("别扫了", opts).命中.编号 == 3
-
 
 def test_negation_wins_even_with_positive_words():
     m = cf.match("不是我的，但我有权限，继续", cf.owner_options())
