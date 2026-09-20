@@ -37,31 +37,67 @@ git clone https://github.com/wenshuo0114/mcp-skill.git
 - macOS / Linux：`/Users/你的用户名/mcp-skill`
 - Windows：`C:\Users\你的用户名\mcp-skill`（写进 json 时建议写成 `C:/Users/你的用户名/mcp-skill`）
 
-### 2. 安装依赖
+### 2. 安装依赖（重要：pip 和 Py3 必须是同一个）
 
-在 `mcp-skill` 目录里打开终端，执行：
+**直接敲 `pip` 再敲 `python3` 很容易翻车**：系统里常有好几个 Python，`pip` 装进 A，Cursor 却用 B 启动审查器，就会报 `No module named mcp`。  
+正确做法：**永远用「同一个解释器」装包、启动。** 需要 Python **≥ 3.10**。
 
-```bash
-pip install -e .
-```
+#### 推荐：先建虚拟环境（最稳）
 
-装不上时可以试：
-
-```bash
-pip install "mcp>=1.2" pyyaml
-```
-
-### 3. 可选自检：Python 能不能启动审查器
-
-仍在 `mcp-skill` 目录：
+在 `mcp-skill` 目录里：
 
 ```bash
-python3 -m servers.file_reviewer.server
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python -m pip install -e .
 ```
+
+以后 mcp.json 的 `"command"` 写成这个虚拟环境里的 Python（见第二节），不要再写裸的 `python3`。
+
+#### 也可以：不用 venv，但必须 `python -m pip`
+
+```bash
+python3 -m pip install -e .
+```
+
+不要单独写 `pip install …`（除非你很确定 `which pip` 和 `which python3` 是一对）。
+
+装不上时：
+
+```bash
+python3 -m pip install "mcp>=1.2" pyyaml
+```
+
+若系统报 `externally-managed-environment`（新版 Debian/Ubuntu/macOS Homebrew 常见）：**不要**强行 `--break-system-packages`，改用上面的 `.venv` 方案。
+
+Windows 若没有 `python3` 命令，用启动器：
+
+```bash
+py -3 -m venv .venv
+.venv\Scripts\activate
+python -m pip install -e .
+```
+
+### 3. 可选自检：装包的那个 Python 能不能启动审查器
+
+仍在 `mcp-skill` 目录（若建了 venv，先 `source .venv/bin/activate`）：
+
+```bash
+python -m servers.file_reviewer.server
+```
+
+（没进 venv 时可用 `python3 -m servers.file_reviewer.server`，但必须和上一步装包用的是同一个。）
 
 - **对的**：命令挂住、不立刻退出，也没有 `No module named mcp`。用 Ctrl+C 停掉即可。
-- **错的**：报找不到 `mcp` → 回到上一步，确认用的是装过依赖的那个 Python；必要时把下面 mcp.json 里的 `"command": "python3"` 改成该 Python 的绝对路径（如 `/usr/bin/python3` 或 `C:/Python312/python.exe`）。
+- **错的**：报找不到 `mcp` → `pip` 和启动用的 Python 不是同一个。用下面核对：
 
+```bash
+which python3
+python3 -m pip show mcp
+python3 -c "import mcp; print(mcp.__file__)"
+```
+
+mcp.json 的 `"command"` 必须改成**能 `import mcp` 的那个**绝对路径（venv 例：`/Users/你/mcp-skill/.venv/bin/python`；系统例：`/usr/bin/python3`；Windows 例：`C:/Users/你/mcp-skill/.venv/Scripts/python.exe`）。
 ---
 
 ## 二、挂进 Cursor（两种选一种就够）
@@ -74,13 +110,13 @@ python3 -m servers.file_reviewer.server
 2. 打开 **Settings → MCP**（或 Cursor Settings 里搜 MCP）。
 3. 应能看到名为 `file-reviewer` 的服务器；状态为已连接 / 绿灯再往下用。
 
-仓库自带配置大致是：
+仓库自带配置大致是（默认写的是 `python3`，**若你建了 `.venv`，请把 command 改成 venv 里的 python**）：
 
 ```json
 {
   "mcpServers": {
     "file-reviewer": {
-      "command": "python3",
+      "command": "${workspaceFolder}/.venv/bin/python",
       "args": ["-m", "servers.file_reviewer.server"],
       "cwd": "${workspaceFolder}",
       "env": {
@@ -92,8 +128,10 @@ python3 -m servers.file_reviewer.server
 }
 ```
 
-`${workspaceFolder}` 在这种方式下就是 mcp-skill 自己，不用改。
+Windows 把 `command` 写成：`${workspaceFolder}/.venv/Scripts/python.exe`。  
+没建 venv、且本机只有一个 Python 时，才用 `"command": "python3"`。
 
+`${workspaceFolder}` 在这种方式下就是 mcp-skill 自己；`cwd` 不用改。
 ### 方式 B（推荐长期）：在别的项目里也能审
 
 想打开 `xinshijie`（或任意项目）当工作区，同时仍用本审查器：
@@ -105,7 +143,7 @@ python3 -m servers.file_reviewer.server
 {
   "mcpServers": {
     "file-reviewer": {
-      "command": "python3",
+      "command": "/Users/你的用户名/mcp-skill/.venv/bin/python",
       "args": ["-m", "servers.file_reviewer.server"],
       "cwd": "/Users/你的用户名/mcp-skill",
       "env": {
@@ -117,6 +155,7 @@ python3 -m servers.file_reviewer.server
 }
 ```
 
+Windows 例：`"command": "C:/Users/你的用户名/mcp-skill/.venv/Scripts/python.exe"`。
 3. **Reload Window**（命令面板搜 Reload）或重启 Cursor。
 4. 再到 **Settings → MCP** 确认 `file-reviewer` 已连接。
 
@@ -180,7 +219,9 @@ origin repo clone shuo-yang-dev/xinshijie ~/xinshijie
 
 | 现象 | 怎么办 |
 |---|---|
-| MCP 红灯 / `No module named mcp` | 用装过依赖的那个 Python；把 `command` 改成绝对路径 |
+| MCP 红灯 / `No module named mcp` | **多半是 pip 和 Py3 不是同一个。** 用 `.venv`，`command` 指向 `.venv` 里的 python；或用 `python3 -m pip` 装完再把同一条 `python3` 的绝对路径写入 mcp.json |
+| `pip: command not found` / `externally-managed-environment` | 不要裸用系统 pip；`python3 -m venv .venv` 再 `python -m pip install -e .` |
+| Windows 找不到 `python3` | 用 `py -3`；mcp.json 的 command 写 `.venv\Scripts\python.exe` 的路径 |
 | 打开了被审项目，MCP 起不来 | 检查 `cwd` 是否仍指向 **mcp-skill** |
 | 只扫了源码，漏了依赖目录 | 对话里说「严格模式」，或设 `MCP_SKILL_STRICT=1` |
 | 想删网上的远程仓 | 那是 Origin / GitHub 网页或 CLI 删仓，不是 MCP 挂载问题；先审本地副本再决定 |

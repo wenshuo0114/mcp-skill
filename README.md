@@ -18,19 +18,23 @@
 
 ## 安装与接入 Cursor
 
-不会配 MCP？先看白话步骤：[docs/挂载到MCP入门.md](docs/挂载到MCP入门.md)（分清「审查器」和「被审文件夹」、本机安装、方式 A/B、严格审查怎么说、常见翻车点）。
+不会配 MCP？先看白话步骤：[docs/挂载到MCP入门.md](docs/挂载到MCP入门.md)（分清「审查器」和「被审文件夹」、**pip 与 python3 必须同一解释器**、venv 推荐、方式 A/B、严格审查怎么说、常见翻车点）。
 
 ```bash
-pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python -m pip install -e .         # 不要裸敲 pip；要和启动用的是同一个 Python
 ```
 
-仓库自带 [.cursor/mcp.json](.cursor/mcp.json)，Cursor 打开本仓库即自动加载：
+（急用且本机只有一个 Python ≥3.10 时：`python3 -m pip install -e .`。）
+
+仓库自带 [.cursor/mcp.json](.cursor/mcp.json)。**建了 `.venv` 后**建议把 `command` 改成虚拟环境里的解释器，避免 Cursor 找到另一个没装 `mcp` 的 `python3`：
 
 ```json
 {
   "mcpServers": {
     "file-reviewer": {
-      "command": "python3",
+      "command": "${workspaceFolder}/.venv/bin/python",
       "args": ["-m", "servers.file_reviewer.server"],
       "cwd": "${workspaceFolder}"
     }
@@ -38,8 +42,7 @@ pip install -e .            # 或 pip install "mcp>=1.2" pyyaml
 }
 ```
 
-要在别的项目里用，把上面这段复制进那个项目的 `.cursor/mcp.json`，`cwd` 改成本仓库的绝对路径。
-
+Windows：`command` 用 `${workspaceFolder}/.venv/Scripts/python.exe`。要在别的项目里用：复制这段，`cwd` 与 `command` 都改成本仓库（及其 `.venv`）的绝对路径。
 技能文件放在 `skills/`：把 `skills/code-review` 和 `skills/code-teaching` 复制到 `~/.cursor/skills/`（或项目的 `.cursor/skills/`），Cursor 会按需加载。
 
 ## 环境变量
