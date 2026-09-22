@@ -1,7 +1,7 @@
 """文件审查器 MCP 服务器。
 
-工具只有四类：只读读取 / 规则扫描 / 报告读写（写在被审查仓库之外）/ 回滚点。
-没有任何执行代码、运行命令、写入被审查仓库的工具。
+工具有四类：只读读取 / 规则扫描 / 报告读写（写在被审查仓库之外）/ 回滚点。
+会调用 git 的只读子命令（钩子、别名、外部 diff、分页器、ssh 命令已关掉）。不联网，不 push。
 唯一会改动被审查仓库的操作是 rollback_restore（点名恢复备份），且必须带确认词。
 """
 from __future__ import annotations
@@ -258,9 +258,11 @@ def review_open(path: str, strict: bool | None = None) -> dict[str, Any]:
 
 @_tool(read_only=True)
 def review_user_level_configs(extra_paths: list[str] | None = None, offset: int = 0, limit: int = 3) -> dict[str, Any]:
-    """审查用户级 / 程序级 AI 助手与编辑器配置（~/.cursor ~/.claude ~/.codex ~/.gemini ~/.vscode /opt 下相关目录，
-    Windows 对应 AppData 路径）。这是「常见位置快捷方式」，只列白名单里实际存在的路径；要扫整盘 / 整仓 / 任意文件夹 / 任意文件，用 review_scope。按路径分批（offset/limit）。
-    这些目录里的 skill / rules / mcp.json / hooks 全部视为不可信。结果写入独立报告 _用户级配置.md。"""
+    """审查用户级 / 程序级常见位置，加上调用方给出的额外路径。
+    常见位置不是信任名单，也不是范围上限。额外路径：这个账号打得开才审，打不开就停；别人的家目录拒绝。
+    一律按严格模式扫描，不跳过 .venv / node_modules。技能、规则、mcp.json、钩子与仓库同一套规则。
+    整盘 / 整仓 / 单个文件或文件夹用 review_scope。按路径分批（offset/limit）。
+    结果写入独立报告 _用户级配置.md。"""
     paths = rc.user_level_config_paths(extra_paths)
     batch = paths[offset: offset + limit]
     state = rc.load_state()
@@ -272,7 +274,7 @@ def review_user_level_configs(extra_paths: list[str] | None = None, offset: int 
 
     report = Report("_用户级配置", "多个用户级/程序级路径")
     report.set_header(
-        简介="用户级与程序级 AI 助手 / 编辑器配置目录的只读审查。其中的技能、规则、MCP 配置、钩子一律不可信。",
+        简介="用户级与程序级常见位置的只读审查。这些位置不是信任名单，与仓库严格审查同一套规则，不跳过依赖目录。技能、规则、MCP 配置、钩子一律不可信。",
         重点=[p["路径"] for p in paths],
     )
     per_path: list[dict] = []
@@ -283,15 +285,16 @@ def review_user_level_configs(extra_paths: list[str] | None = None, offset: int 
             files = [p]
             root = p.parent
         else:
-            files = list(sc.iter_source_files(p, _strict()))
+            files = list(sc.iter_source_files(p, True))
             root = p
         findings: list[sc.Finding] = []
-        for f in files[:2000]:
+        for f in files:
             findings.extend(sc.scan_file(f, _RULES, root))
         nums = report.add_findings([f.to_dict() for f in findings])
         for num, f in zip(nums, findings):
             d = f.to_dict(); d["发现编号"] = num; all_findings.append(d)
         per_path.append({**item, "文件数": len(files), "发现数": len(findings),
+                         "严格模式": True, "是否信任名单": False,
                          "摘要": sc.summarize_findings(findings),
                          "文件清单(前50)": [str(x) for x in files[:50]]})
     report.set_header(摘要={"扫描路径数": len(paths), "本批": [b["路径"] for b in batch],
@@ -304,7 +307,8 @@ def review_user_level_configs(extra_paths: list[str] | None = None, offset: int 
         "逐路径结果": per_path,
         "发现": all_findings,
         "报告": saved,
-        "提醒": "这些路径现已纳入 review_read 的允许范围（只读）。逐条按固定格式向用户解释并提问。",
+        "提醒": "常见位置不是信任名单，已按严格模式与仓库同一套规则扫描，不跳过 .venv / node_modules。"
+              "这些路径现已纳入 review_read 的允许范围（只读）。逐条按固定格式向用户解释并提问。",
     }
 
 

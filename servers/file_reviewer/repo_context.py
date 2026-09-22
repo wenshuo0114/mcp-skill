@@ -23,7 +23,15 @@ STATE_FILE = STATE_DIR / "state.json"
 LARGE_PROJECT_FILES = int(os.environ.get("MCP_SKILL_LARGE_FILES", "200"))
 LARGE_PROJECT_LINES = int(os.environ.get("MCP_SKILL_LARGE_LINES", "50000"))
 
-_GIT_SAFE = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+# 命令行 -c 盖过仓库 .git/config：关掉钩子、别名、外部 diff、分页器和 ssh 命令。
+# 别名在 _git 里按本次子命令再加一条 alias.<子命令>=（空值），避免 ! 别名变成执行。
+_GIT_LOCKDOWN = [
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "core.fsmonitor=false",
+    "-c", "diff.external=",
+    "-c", "core.pager=",
+    "-c", "core.sshCommand=",
+]
 
 
 # 审查器只允许这些只读 git 子命令。push / fetch / pull / remote add / commit / config --set 等一律不在其中：
@@ -42,7 +50,8 @@ def _git(args: list[str], cwd: Path) -> str | None:
         raise PermissionError("审查器禁止改 git remote")
     try:
         out = subprocess.run(
-            _GIT_SAFE + args, cwd=str(cwd), capture_output=True, text=True, timeout=15,
+            ["git", *_GIT_LOCKDOWN, "-c", f"alias.{args[0]}=", *args],
+            cwd=str(cwd), capture_output=True, text=True, timeout=15,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"},
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -272,7 +281,7 @@ def _points_outside(kind: str, ref: str, file_path: Path, root: Path) -> bool | 
     return True  # 环境变量路径与 git 地址默认视为指向仓库外，需要用户确认
 
 
-# ---------- 用户级 / 程序级 AI 助手与编辑器配置目录（白名单，不是任意路径） ----------
+# ---------- 用户级 / 程序级常见位置（不是信任名单；审查时与仓库同一套严格规则） ----------
 
 _USER_LEVEL_CANDIDATES = (
     # Linux / macOS 用户级
@@ -290,8 +299,17 @@ _OPT_KEYWORDS = ("cursor", "agent", "vscode", "code", "codex", "claude", "gemini
 _OPT_ROOTS = ("/opt", "/usr/local/lib", "/usr/lib", "C:/Program Files", "C:/Program Files (x86)")
 
 
+def _openable(path: Path) -> bool:
+    """这个账号现在打得开。打不开就停，不猜密码。"""
+    try:
+        return path.exists() and os.access(path, os.R_OK)
+    except OSError:
+        return False
+
+
 def user_level_config_paths(extra: list[str] | None = None) -> list[dict]:
-    """返回实际存在的用户级/程序级配置路径。这是常见位置的快捷方式，只列白名单；整盘请用 enumerate_scope(disk_roots())。"""
+    """返回这个账号打得开的常见位置，加上调用方给出的、同样打得开的路径。
+    名单不是信任名单，也不是范围上限。打不开的路径在 extra 里会直接停。别人的家目录一律拒绝。"""
     found: list[dict] = []
     seen: set[str] = set()
 
@@ -306,7 +324,7 @@ def user_level_config_paths(extra: list[str] | None = None) -> list[dict]:
         found.append({"路径": str(rp), "类型": "目录" if rp.is_dir() else "文件", "来源": 来源})
 
     for c in _USER_LEVEL_CANDIDATES:
-        add(Path(c), "用户级白名单")
+        add(Path(c), "常见位置")
     for opt_root in (Path(r) for r in _OPT_ROOTS):
         if opt_root.is_dir():
             try:
@@ -316,6 +334,15 @@ def user_level_config_paths(extra: list[str] | None = None) -> list[dict]:
             except OSError:
                 pass
     for e in extra or []:
+        try:
+            rp = Path(e).expanduser().resolve()
+        except (OSError, RuntimeError) as err:
+            raise PermissionError(f"拒绝：无法解析额外路径 {e}：{err}") from err
+        refuse_other_user_path(rp)
+        if not _openable(rp):
+            raise PermissionError(
+                f"打不开，停：{rp}。不去猜密码，也不进别人的账号或仓库。"
+            )
         add(Path(e), "用户指定")
     return found
 

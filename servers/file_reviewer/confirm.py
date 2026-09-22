@@ -134,7 +134,7 @@ def disk_options() -> list[Option]:
     return [
         Option(1, "✅ 授权只读扫描整盘（只扫我能扫的，永不进其他用户家目录）",
                "扫整盘：跳过其他用户家目录。本工具没有「含其他用户」选项。",
-               关键字=["授权", "整盘", "扫", "扫描", "只读", "继续", "可以", "好", "只我", "不含"], 值=True),
+               关键字=["授权", "整盘", "扫", "扫描", "只读", "只我", "不含"], 值=True),
         Option(2, "不扫", "不扫整盘。可以改用 mode=文件夹 只扫你自己的目录",
                关键字=STOP_WORDS + ["含其他", "包含其他", "其他用户", "别人的", "他人的"], 否定优先=True, 值=False),
     ]
@@ -143,7 +143,7 @@ def disk_options() -> list[Option]:
 def credential_options(filename: str) -> list[Option]:
     return [
         Option(1, f"✅ 授权只读密钥文件 {filename}", f"只读 {filename}：只回显变量名和结构，值一律隐去",
-               关键字=["授权", "只读", "密钥", "读", "可以", "继续", "好", filename], 值=True),
+               关键字=["授权", "只读", "密钥", "读", filename], 值=True),
         Option(2, "不读", "不读这个文件；它只出现在凭据清单里（路径、变量名、git 跟踪状态）",
                关键字=STOP_WORDS, 否定优先=True, 值=False),
     ]
@@ -152,7 +152,7 @@ def credential_options(filename: str) -> list[Option]:
 def restore_options(name: str) -> list[Option]:
     return [
         Option(1, f"用户已授权恢复 {name}", f"恢复回滚点 {name}：会覆盖仓库内对应文件",
-               关键字=["授权", "恢复", "回滚", "还原", "可以", "继续", "好", name], 值=True),
+               关键字=["授权", "恢复", "回滚", "还原", name], 值=True),
         Option(2, "不恢复", "不恢复，什么都不动", 关键字=STOP_WORDS, 否定优先=True, 值=False),
     ]
 
@@ -162,7 +162,7 @@ def neutralize_options(filename: str, line_no: int | None, whole_file: bool) -> 
     return [
         Option(1, f"✅ 授权无害化 {target}", f"就地无害化 {target}：清原文、写空值、加只读中文注释；不留备份" if not whole_file
                else f"删除整个文件 {filename}：它本身就是载荷，不留空壳、不留副本",
-               关键字=["授权", "无害化", "钉", "清", "删", "删除", "可以", "继续", "好", "处理", filename], 值="do"),
+               关键字=["授权", "无害化", "钉", "清", "删", "删除", "处理", filename], 值="do"),
         Option(2, "不动，只记后果", "不修改、不删除；把“不动的后果”写进报告",
                关键字=STOP_WORDS + ["只记", "记后果", "先不"], 否定优先=True, 值="record_only"),
         Option(3, "先出恢复正常功能的方案", "改动大：先说明要恢复网站哪些正常功能、去掉哪类私加物（不给复现）；看完再决定",
